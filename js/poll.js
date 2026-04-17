@@ -65,12 +65,18 @@
     if (!state.questions.length) { showEmpty(); return; }
 
     populateAssignedUserOptions();
-    restoreDraft();
+    // Every session starts at the identity screen. We deliberately
+    // do not auto-resume from a saved user - entering name + user
+    // is the consistent front door for everyone, every time.
+    SP.utils.clearDraft();
+    try { localStorage.removeItem(SP.utils.STORAGE_KEYS.USER); } catch (_) {}
+    state.user = null;
+    state.answers = {};
+    state.currentIndex = 0;
+
     wireIdentity();
     wireNavigation();
-
-    if (state.user && state.user.assignedUserId) showQuestion();
-    else { state.user = null; showIdentity(); }
+    showIdentity();
   });
 
   // -------------------------------------------------------
@@ -85,22 +91,12 @@
   function showEmpty()    { hideAll(); el.empty && el.empty.classList.remove("is-hidden"); }
 
   // -------------------------------------------------------
-  // Draft (invalidated when the question set signature changes)
+  // Draft (within-session only - saves progress across the
+  // question screens but is cleared at the start of every visit).
   // -------------------------------------------------------
   function draftKey() { return "q:" + state.questions.map((q) => q.id).join("|"); }
   function saveDraft() {
     SP.utils.saveDraft({ key: draftKey(), answers: state.answers, currentIndex: state.currentIndex });
-  }
-  function restoreDraft() {
-    const draft = SP.utils.loadDraft();
-    const user  = SP.utils.loadUser();
-    if (user && user.id && user.assignedUserId) state.user = user;
-    if (draft && draft.key === draftKey() && draft.answers) {
-      state.answers = draft.answers;
-      state.currentIndex = Math.min(draft.currentIndex || 0, state.questions.length - 1);
-    } else if (draft) {
-      SP.utils.clearDraft();
-    }
   }
 
   // -------------------------------------------------------
