@@ -1,80 +1,91 @@
 /**
  * Swift Poll - dashboard access gate.
  *
- * Requires both a user selection (to scope the dashboard view)
- * and the shared DASHBOARD_PASSCODE. On success we stash the
- * selected user in sessionStorage and forward to the dashboard.
+ * Loads the active dashboard user list dynamically and validates
+ * credentials via the `dashboard_login` RPC (bcrypt check in DB).
+ * On success, stores { id, displayName, role } in sessionStorage
+ * and forwards to the dashboard.
  */
 (function () {
-  const CFG = window.SWIFT_POLL_CONFIG || {};
-  const STORAGE_KEYS = (window.SP && SP.utils && SP.utils.STORAGE_KEYS) || {};
-  const SESSION_KEY = "dashboardUser";
+  const SESSION_KEY = "swift_poll.dashboard_session";
 
-  document.addEventListener("DOMContentLoaded", () => {
+  document.addEventListener("DOMContentLoaded", async () => {
     SP.utils.setHeaderBrand();
 
     const form     = document.querySelector("[data-access-form]");
     const select   = document.querySelector("[data-access-user-select]");
     const password = document.querySelector("[name='accessPassword']");
     const errorBox = document.querySelector("[data-access-error]");
+    const submit   = form.querySelector("button[type='submit']");
 
-    // Already authenticated in this tab? Skip straight through.
-    if (sessionStorage.getItem(SESSION_KEY)) {
+    // Already authenticated in this tab? Forward through.
+    if (getSession()) {
       window.location.replace("dashboard.html");
       return;
     }
 
-    // Populate the user dropdown from config
-    const users = Array.isArray(CFG.ASSIGNED_USERS) ? CFG.ASSIGNED_USERS : [];
-    const allOpt = document.createElement("option");
-    allOpt.value = "all";
-    allOpt.textContent = "All Users";
-    select.appendChild(allOpt);
-    for (const u of users) {
-      const opt = document.createElement("option");
-      opt.value = u.value;
-      opt.textContent = u.label;
-      select.appendChild(opt);
+    // Populate the user dropdown from the DB
+    try {
+      const users = await SP.db.listDashboardUsers();
+      for (const u of users) {
+        const opt = document.createElement("option");
+        opt.value = u.display_name;
+        opt.textContent = u.display_name + (u.role === "admin" ? " (Admin)" : "");
+        select.appendChild(opt);
+      }
+    } catch (err) {
+      console.error(err);
+      errorBox.textContent = friendlyError(err, "Could not load accounts.");
     }
 
-    form.addEventListener("submit", (e) => {
+    form.addEventListener("submit", async (e) => {
       e.preventDefault();
       errorBox.textContent = "";
 
-      const chosen = (select.value || "").trim();
+      const chosen  = (select.value || "").trim();
       const entered = (password.value || "").trim();
-      const expected = String(CFG.DASHBOARD_PASSCODE || "").trim();
 
-      if (!chosen) {
-        errorBox.textContent = "Please select a user to continue.";
-        select.focus();
-        return;
-      }
-      if (!entered) {
-        errorBox.textContent = "Please enter the dashboard password.";
-        password.focus();
-        return;
-      }
-      if (!expected) {
-        errorBox.textContent =
-          "No dashboard password is configured. Set DASHBOARD_PASSCODE in js/config.js.";
-        return;
-      }
-      if (entered !== expected) {
-        errorBox.textContent = "Incorrect password. Please try again.";
-        password.value = "";
-        password.focus();
-        return;
-      }
+      if (!chosen)  { errorBox.textContent = "Please select a user to continue."; select.focus(); return; }
+      if (!entered) { errorBox.textContent = "Please enter your password."; password.focus(); return; }
 
-      sessionStorage.setItem(SESSION_KEY, chosen);
-      // Keep the legacy auth key in sync so any stray code paths
-      // that still check localStorage do not re-prompt.
+      submit.disabled = true;
+      submit.textContent = "Signing in...";
       try {
-        if (STORAGE_KEYS.DASH_AUTH) localStorage.setItem(STORAGE_KEYS.DASH_AUTH, entered);
-      } catch (_) {}
-
-      window.location.replace("dashboard.html");
+        const match = await SP.db.loginDashboardUser({ displayName: chosen, password: entered });
+        if (!match) {
+          errorBox.textContent = "Incorrect user or password.";
+          password.value = "";
+          password.focus();
+          return;
+        }
+        setSession({ id: match.id, displayName: match.display_name, role: match.role });
+        window.location.replace("dashboard.html");
+      } catch (err) {
+        console.error(err);
+        errorBox.textContent = friendlyError(err, "Could not sign you in. Please try again.");
+      } finally {
+        submit.disabled = false;
+        submit.textContent = "Continue";
+      }
     });
   });
+
+  function setSession(obj) {
+    try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(obj)); } catch (_) {}
+  }
+  function getSession() {
+    try {
+      const raw = sessionStorage.getItem(SESSION_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (_) { return null; }
+  }
+
+  function friendlyError(err, fallback) {
+    const msg = (err && (err.message || err.error_description)) || "";
+    if (/Supabase URL not configured|Supabase client library not loaded/i.test(msg))
+      return "App is not configured yet. Add your Supabase keys in js/config.js.";
+    if (/Failed to fetch|NetworkError/i.test(msg)) return "Network issue. Please try again.";
+    if (/function .* does not exist/i.test(msg)) return "Database is out of date. Re-run supabase-schema.sql.";
+    return fallback + (msg ? " (" + msg + ")" : "");
+  }
 })();

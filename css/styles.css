@@ -809,6 +809,121 @@ a:hover { text-decoration: underline; }
 }
 
 /* ============================================================
+   Question head - required / optional pill
+   ============================================================ */
+.sp-q-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin: 0 0 18px;
+  flex-wrap: wrap;
+}
+.sp-q-required {
+  display: inline-flex; align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.sp-q-required--yes { background: rgba(220, 38, 38, 0.08); color: var(--sp-danger); }
+.sp-q-required--no  { background: var(--sp-bg-2);          color: var(--sp-text-muted); }
+
+/* Text answer on poll page */
+.sp-q-body { display: grid; gap: 10px; }
+.sp-text-answer { display: grid; gap: 6px; }
+.sp-text-answer__area { width: 100%; min-height: 120px; resize: vertical; }
+.sp-text-answer__foot { display: flex; justify-content: flex-end; }
+
+/* Skip button lives inside sp-nav; already flexes. Hide default uses .is-hidden */
+
+/* ============================================================
+   Pills (admin)
+   ============================================================ */
+.sp-pill {
+  display: inline-flex; align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--sp-bg-2); color: var(--sp-text-muted);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.sp-pill--type { background: rgba(37, 99, 235, 0.1); color: var(--sp-blue-600); }
+.sp-pill--req  { background: rgba(22, 163, 74, 0.12); color: var(--sp-green-600); }
+
+.sp-q-row__meta { display: flex; gap: 6px; margin: 6px 0 8px; flex-wrap: wrap; }
+
+/* ============================================================
+   Toggle switch (Required)
+   ============================================================ */
+.sp-field--checkbox { align-self: end; }
+.sp-switch {
+  display: inline-flex; align-items: center; gap: 10px;
+  cursor: pointer; user-select: none;
+  padding-top: 28px;
+}
+.sp-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.sp-switch__track {
+  width: 40px; height: 22px;
+  background: var(--sp-border-2);
+  border-radius: 999px; position: relative;
+  transition: background 0.2s ease;
+  flex: 0 0 40px;
+}
+.sp-switch__track::after {
+  content: "";
+  position: absolute; top: 3px; left: 3px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  transition: transform 0.2s ease;
+}
+.sp-switch input:checked + .sp-switch__track { background: var(--sp-green); }
+.sp-switch input:checked + .sp-switch__track::after { transform: translateX(18px); }
+.sp-switch__label { font-size: 14px; font-weight: 600; }
+
+/* ============================================================
+   MCQ option fields in the admin add-question form
+   ============================================================ */
+.sp-option-field__row { display: flex; gap: 8px; align-items: stretch; }
+.sp-option-field__input { flex: 1; }
+.sp-option-field__remove {
+  padding: 0 14px; min-width: 40px;
+  font-size: 18px; line-height: 1;
+}
+.sp-admin__options-actions {
+  display: flex; align-items: center; gap: 12px;
+  margin: 4px 0 10px;
+}
+.sp-admin__options-actions .sp-muted { font-size: 12px; }
+
+/* ============================================================
+   User admin rows
+   ============================================================ */
+.sp-user-admin {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap;
+  background: #fff;
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-lg);
+  padding: 12px 14px;
+  box-shadow: var(--sp-shadow-sm);
+}
+.sp-user-admin__main { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.sp-user-admin__name { font-weight: 700; }
+.sp-user-admin__actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* Delete button floating right on user card */
+.sp-user-card__rhs { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+
+/* Header who-am-i */
+.sp-header__who {
+  font-size: 12px; color: var(--sp-text-muted); font-weight: 600;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--sp-bg-2);
+  margin-right: 6px;
+  white-space: nowrap;
+}
+
+/* ============================================================
    Reduced motion
    ============================================================ */
 @media (prefers-reduced-motion: reduce) {

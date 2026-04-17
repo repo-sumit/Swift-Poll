@@ -15,7 +15,8 @@
       <span class="sp-header__name" data-brand-name>Swift Poll</span>
     </a>
     <nav class="sp-header__nav" aria-label="Primary">
-      <a href="poll.html" class="sp-link" data-go-poll>Take Poll</a>
+      <span class="sp-header__who" data-session-who></span>
+      <a href="poll.html" class="sp-link">Take Poll</a>
     </nav>
   </header>
 
@@ -23,7 +24,7 @@
     <section class="sp-dash-hero">
       <div>
         <h1 class="sp-dash-hero__title">Dashboard</h1>
-        <p class="sp-dash-hero__sub">Live aggregated results and individual responses.</p>
+        <p class="sp-dash-hero__sub" data-dash-sub>Live aggregated results and individual responses.</p>
       </div>
       <div class="sp-dash-hero__actions">
         <button class="sp-btn sp-btn--ghost sp-btn--sm" type="button" data-refresh>
@@ -31,6 +32,10 @@
         </button>
         <button class="sp-btn sp-btn--primary sp-btn--sm" type="button" data-export-csv>
           Export CSV
+        </button>
+        <button class="sp-btn sp-btn--danger sp-btn--sm is-hidden" type="button" data-open-reset
+                data-admin-only>
+          Reset
         </button>
         <button class="sp-btn sp-btn--ghost sp-btn--sm" type="button" data-logout>
           Log out
@@ -42,10 +47,13 @@
       <label class="sp-filter-bar__label" for="filter-assigned-user">View responses for</label>
       <select id="filter-assigned-user" class="sp-input sp-select sp-filter-bar__select"
               data-filter-user>
-        <option value="all">All Users</option>
       </select>
       <span class="sp-filter-bar__hint" data-filter-hint></span>
     </section>
+
+    <p class="sp-error" data-error role="alert"></p>
+
+    <div class="sp-loading" data-loading>Loading dashboard...</div>
 
     <section class="sp-stats" aria-label="Summary">
       <div class="sp-stat-card">
@@ -54,19 +62,14 @@
       </div>
     </section>
 
-
-    <p class="sp-error" data-error role="alert"></p>
-
-    <div class="sp-loading" data-loading>Loading dashboard...</div>
-
     <!-- ================================================
-         Admin: Manage Questions
+         Admin: Manage Questions (hidden for normal users)
          ================================================ -->
-    <section class="sp-section sp-admin" aria-labelledby="manage-title">
+    <section class="sp-section sp-admin is-hidden" data-admin-only aria-labelledby="manage-title">
       <div class="sp-admin__head">
         <div>
           <h2 id="manage-title" class="sp-section__title">Manage questions</h2>
-          <p class="sp-admin__sub">Add new questions or remove existing ones. Changes apply instantly.</p>
+          <p class="sp-admin__sub">Add questions (MCQ or free text). Changes apply instantly.</p>
         </div>
       </div>
 
@@ -79,44 +82,33 @@
             <span class="sp-counter" data-counter-for="questionText">0 / 150</span>
           </label>
           <textarea id="admin-q-text" name="questionText" class="sp-input sp-input--area"
-                    maxlength="150" rows="2"
-                    placeholder="e.g. Does your platform personalise learning paths?"
-                    required></textarea>
+                    maxlength="150" rows="2" required
+                    placeholder="e.g. How satisfied are you with your current platform?"></textarea>
         </div>
 
         <div class="sp-field-grid">
           <div class="sp-field">
-            <label for="admin-opt-1" class="sp-field__label">
-              Option 1 <span class="sp-req">*</span>
-              <span class="sp-counter" data-counter-for="option1">0 / 75</span>
-            </label>
-            <input id="admin-opt-1" name="option1" class="sp-input" maxlength="75"
-                   placeholder="e.g. Yes" required />
+            <label for="admin-q-type" class="sp-field__label">Question type</label>
+            <select id="admin-q-type" name="questionType" class="sp-input sp-select" data-question-type>
+              <option value="single_select">MCQ - single select (2 to 5 options)</option>
+              <option value="text_input">Text input (up to 200 chars)</option>
+            </select>
           </div>
-          <div class="sp-field">
-            <label for="admin-opt-2" class="sp-field__label">
-              Option 2 <span class="sp-req">*</span>
-              <span class="sp-counter" data-counter-for="option2">0 / 75</span>
+          <div class="sp-field sp-field--checkbox">
+            <label class="sp-switch">
+              <input type="checkbox" name="isRequired" />
+              <span class="sp-switch__track" aria-hidden="true"></span>
+              <span class="sp-switch__label">Required</span>
             </label>
-            <input id="admin-opt-2" name="option2" class="sp-input" maxlength="75"
-                   placeholder="e.g. Not Sure" required />
           </div>
-          <div class="sp-field">
-            <label for="admin-opt-3" class="sp-field__label">
-              Option 3 <span class="sp-req">*</span>
-              <span class="sp-counter" data-counter-for="option3">0 / 75</span>
-            </label>
-            <input id="admin-opt-3" name="option3" class="sp-input" maxlength="75"
-                   placeholder="e.g. No" required />
-          </div>
-          <div class="sp-field">
-            <label for="admin-opt-4" class="sp-field__label">
-              Option 4 <span class="sp-req">*</span>
-              <span class="sp-counter" data-counter-for="option4">0 / 75</span>
-            </label>
-            <input id="admin-opt-4" name="option4" class="sp-input" maxlength="75"
-                   placeholder="e.g. Not Applicable" required />
-          </div>
+        </div>
+
+        <div class="sp-field-grid sp-admin__options" data-options-wrap>
+          <!-- option fields rendered dynamically -->
+        </div>
+        <div class="sp-admin__options-actions" data-options-actions>
+          <button type="button" class="sp-btn sp-btn--ghost sp-btn--sm" data-add-option>+ Add option</button>
+          <span class="sp-muted" data-options-meta></span>
         </div>
 
         <p class="sp-error" data-add-question-error role="alert"></p>
@@ -136,6 +128,47 @@
       </div>
     </section>
 
+    <!-- ================================================
+         Admin: Manage Users (hidden for normal users)
+         ================================================ -->
+    <section class="sp-section sp-admin is-hidden" data-admin-only aria-labelledby="users-mgmt-title">
+      <div class="sp-admin__head">
+        <div>
+          <h2 id="users-mgmt-title" class="sp-section__title">Manage users</h2>
+          <p class="sp-admin__sub">Add, rename, change password, or deactivate dashboard accounts.</p>
+        </div>
+      </div>
+
+      <form class="sp-card sp-admin__form" data-add-user-form novalidate>
+        <h3 class="sp-admin__form-title">Add a new user</h3>
+        <div class="sp-field-grid">
+          <div class="sp-field">
+            <label class="sp-field__label">Display name <span class="sp-req">*</span></label>
+            <input class="sp-input" name="userName" type="text" required maxlength="60"
+                   placeholder="e.g. Region North" />
+          </div>
+          <div class="sp-field">
+            <label class="sp-field__label">Password <span class="sp-req">*</span></label>
+            <input class="sp-input" name="userPassword" type="password" required minlength="4" maxlength="120"
+                   placeholder="min 4 chars" />
+          </div>
+          <div class="sp-field">
+            <label class="sp-field__label">Role</label>
+            <select class="sp-input sp-select" name="userRole">
+              <option value="user">Normal user</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+        </div>
+        <p class="sp-error" data-add-user-error role="alert"></p>
+        <div class="sp-form__actions sp-admin__form-actions">
+          <button type="submit" class="sp-btn sp-btn--primary">Add User</button>
+        </div>
+      </form>
+
+      <div class="sp-admin__list" data-users-list></div>
+    </section>
+
     <section class="sp-empty is-hidden" data-empty-state>
       <h2>No responses yet</h2>
       <p>Once users submit the poll, their results will show up here in real time.</p>
@@ -151,33 +184,89 @@
       <h2 id="users-title" class="sp-section__title">User-wise responses</h2>
       <div data-user-responses></div>
     </section>
-
   </main>
 
-  <!-- Delete confirmation modal -->
-  <div class="sp-modal is-hidden" data-modal role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <!-- Delete question modal -->
+  <div class="sp-modal is-hidden" data-modal-delete-q role="dialog" aria-modal="true" aria-labelledby="modal-dq-title">
     <div class="sp-modal__backdrop" data-modal-cancel></div>
     <div class="sp-modal__dialog" role="document">
-      <h3 id="modal-title" class="sp-modal__title">Delete this question?</h3>
-      <p class="sp-modal__body" data-modal-body>
-        Deleting this question will remove it from the live poll and dashboard. Continue?
-      </p>
+      <h3 id="modal-dq-title" class="sp-modal__title">Delete this question?</h3>
+      <p class="sp-modal__body" data-modal-dq-body>Deleting this question will remove it from the live poll and dashboard. Continue?</p>
       <div class="sp-modal__actions">
         <button type="button" class="sp-btn sp-btn--ghost" data-modal-cancel>Cancel</button>
-        <button type="button" class="sp-btn sp-btn--danger" data-modal-confirm>Delete</button>
+        <button type="button" class="sp-btn sp-btn--danger" data-modal-dq-confirm>Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Delete submission modal -->
+  <div class="sp-modal is-hidden" data-modal-delete-sub role="dialog" aria-modal="true" aria-labelledby="modal-ds-title">
+    <div class="sp-modal__backdrop" data-modal-cancel></div>
+    <div class="sp-modal__dialog" role="document">
+      <h3 id="modal-ds-title" class="sp-modal__title">Delete this response?</h3>
+      <p class="sp-modal__body" data-modal-ds-body>This removes the submission and all its answers. It cannot be undone. Continue?</p>
+      <div class="sp-modal__actions">
+        <button type="button" class="sp-btn sp-btn--ghost" data-modal-cancel>Cancel</button>
+        <button type="button" class="sp-btn sp-btn--danger" data-modal-ds-confirm>Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Reset modal -->
+  <div class="sp-modal is-hidden" data-modal-reset role="dialog" aria-modal="true" aria-labelledby="modal-reset-title">
+    <div class="sp-modal__backdrop" data-modal-cancel></div>
+    <div class="sp-modal__dialog" role="document">
+      <h3 id="modal-reset-title" class="sp-modal__title">Reset poll data</h3>
+      <p class="sp-modal__body">
+        This will download a CSV backup and then <strong>permanently delete</strong> all
+        questions, options, submissions, and answers. Dashboard users are kept.
+      </p>
+      <div class="sp-field">
+        <label class="sp-field__label" for="reset-confirm">Type <strong>RESET</strong> to confirm</label>
+        <input id="reset-confirm" class="sp-input" type="text" data-reset-confirm placeholder="RESET" autocomplete="off" />
+      </div>
+      <p class="sp-error" data-modal-reset-error role="alert"></p>
+      <div class="sp-modal__actions">
+        <button type="button" class="sp-btn sp-btn--ghost" data-modal-cancel>Cancel</button>
+        <button type="button" class="sp-btn sp-btn--danger" data-modal-reset-confirm disabled>
+          Backup &amp; Reset
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Change password modal -->
+  <div class="sp-modal is-hidden" data-modal-password role="dialog" aria-modal="true" aria-labelledby="modal-pw-title">
+    <div class="sp-modal__backdrop" data-modal-cancel></div>
+    <div class="sp-modal__dialog" role="document">
+      <h3 id="modal-pw-title" class="sp-modal__title">Change password</h3>
+      <p class="sp-modal__body" data-modal-pw-body>Set a new password for this user.</p>
+      <div class="sp-field">
+        <label class="sp-field__label">New password</label>
+        <input class="sp-input" type="password" data-modal-pw-input minlength="4" maxlength="120" placeholder="min 4 chars" />
+      </div>
+      <p class="sp-error" data-modal-pw-error role="alert"></p>
+      <div class="sp-modal__actions">
+        <button type="button" class="sp-btn sp-btn--ghost" data-modal-cancel>Cancel</button>
+        <button type="button" class="sp-btn sp-btn--primary" data-modal-pw-confirm>Save</button>
       </div>
     </div>
   </div>
 
   <footer class="sp-footer">
-    <span>&copy; <span data-year></span> <span data-brand-name>Swift Poll</span></span>
+    <span class="sp-credit">
+      Built with <span class="sp-credit__heart" aria-hidden="true">&#10084;&#65039;</span>
+      <span class="sp-visually-hidden">love</span>
+      by
+      <a href="https://www.linkedin.com/in/in-sumit/" target="_blank" rel="noopener noreferrer"
+         class="sp-credit__link">Sumit</a>
+    </span>
   </footer>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-  <script src="js/config.js?v=3"></script>
-  <script src="js/utils.js?v=3"></script>
-  <script src="js/supabase.js?v=3"></script>
-  <script src="js/dashboard.js?v=3"></script>
-  <script>document.querySelector("[data-year]").textContent = new Date().getFullYear();</script>
+  <script src="js/config.js?v=4"></script>
+  <script src="js/utils.js?v=4"></script>
+  <script src="js/supabase.js?v=4"></script>
+  <script src="js/dashboard.js?v=4"></script>
 </body>
 </html>

@@ -1,29 +1,27 @@
 /**
  * Swift Poll - poll flow controller.
  *
- * Questions are fetched live from Supabase, not from config.
- * Each question carries its own option set (DB uuid + text). The
- * user's answer is keyed by question id and points at the chosen
- * option id, which is what we ship at submit time.
- *
- * Screens:
- *   1. Identity - name only
- *   2. Question - one per screen, DB-driven
- *   3. Success  - after Supabase write succeeds
- *   Empty     - when no active questions exist yet
+ * Questions come from Supabase and can be either:
+ *   - single_select (MCQ 2-5 options)
+ *   - text_input   (free text, max 200 chars)
+ * Each question has a required/optional flag. The respondent
+ * dropdown is populated from active dashboard_users with role='user'.
  */
 (function () {
   const CFG = window.SWIFT_POLL_CONFIG || {};
+  const TEXT_MAX = (SP.db && SP.db.LIMITS && SP.db.LIMITS.TEXT_ANSWER_MAX) || 200;
+
   const state = {
-    questions: [],       // [{ id, text, order, options: [...] }]
-    user: null,          // { id, fullName, assignedUser }
-    answers: {},         // { [questionId]: { optionId, optionText } }
+    questions: [],    // [{ id, text, type, required, options }]
+    user: null,       // { id, fullName, assignedUserId, assignedUserLabel }
+    answers: {},      // { [qId]: MCQ -> {optionId, optionText} | TEXT -> {textAnswer} }
     currentIndex: 0,
     submitting: false,
     submitted: false
   };
 
   let el = {};
+  let pollUsers = [];  // [{id, display_name}]
 
   document.addEventListener("DOMContentLoaded", async () => {
     SP.utils.setHeaderBrand();
@@ -42,17 +40,21 @@
       progressBar:   document.querySelector("[data-progress-bar]"),
       progressLabel: document.querySelector("[data-progress-label]"),
       qText:         document.querySelector("[data-question-text]"),
-      qOptions:      document.querySelector("[data-question-options]"),
+      qRequired:     document.querySelector("[data-question-required]"),
+      qBody:         document.querySelector("[data-question-body]"),
 
       backBtn:       document.querySelector("[data-nav-back]"),
-      nextBtn:       document.querySelector("[data-nav-next]"),
-      submitError:   document.querySelector("[data-submit-error]")
+      skipBtn:       document.querySelector("[data-nav-skip]"),
+      nextBtn:       document.querySelector("[data-nav-next]")
     };
 
-    populateAssignedUserOptions();
-
     try {
-      state.questions = await SP.db.getActiveQuestions();
+      const [questions, users] = await Promise.all([
+        SP.db.getActiveQuestions(),
+        SP.db.getPollUserOptions()
+      ]);
+      state.questions = questions;
+      pollUsers = users;
     } catch (err) {
       console.error(err);
       el.identityError && (el.identityError.textContent = friendlyError(err, "Could not load the poll."));
@@ -60,69 +62,39 @@
       return;
     }
 
-    if (!state.questions.length) {
-      showEmpty();
-      return;
-    }
+    if (!state.questions.length) { showEmpty(); return; }
 
+    populateAssignedUserOptions();
     restoreDraft();
     wireIdentity();
     wireNavigation();
 
-    // Require an assignedUser in the saved state too; older saved
-    // users (pre-segmentation) get bounced back to the identity
-    // screen so they can pick a user.
-    if (state.user && state.user.assignedUser) {
-      showQuestion();
-    } else {
-      state.user = null;
-      showIdentity();
-    }
+    if (state.user && state.user.assignedUserId) showQuestion();
+    else { state.user = null; showIdentity(); }
   });
 
   // -------------------------------------------------------
-  // Screen switching
+  // Screens
   // -------------------------------------------------------
   function hideAll() {
     [el.identity, el.question, el.success, el.empty].forEach((n) => n && n.classList.add("is-hidden"));
   }
-  function showIdentity() {
-    hideAll();
-    el.identity.classList.remove("is-hidden");
-    setTimeout(() => el.fullName && el.fullName.focus(), 50);
-  }
-  function showQuestion() {
-    hideAll();
-    el.question.classList.remove("is-hidden");
-    renderQuestion();
-  }
-  function showSuccess() {
-    hideAll();
-    el.success.classList.remove("is-hidden");
-  }
-  function showEmpty() {
-    hideAll();
-    if (el.empty) el.empty.classList.remove("is-hidden");
-  }
+  function showIdentity() { hideAll(); el.identity.classList.remove("is-hidden"); setTimeout(() => el.fullName && el.fullName.focus(), 50); }
+  function showQuestion() { hideAll(); el.question.classList.remove("is-hidden"); renderQuestion(); }
+  function showSuccess()  { hideAll(); el.success.classList.remove("is-hidden"); }
+  function showEmpty()    { hideAll(); el.empty && el.empty.classList.remove("is-hidden"); }
 
   // -------------------------------------------------------
-  // Draft persistence - per-poll-version so stale drafts get
-  // discarded if the admin changes the question set.
+  // Draft (invalidated when the question set signature changes)
   // -------------------------------------------------------
-  function draftKey() {
-    return "q:" + state.questions.map((q) => q.id).join("|");
-  }
+  function draftKey() { return "q:" + state.questions.map((q) => q.id).join("|"); }
   function saveDraft() {
-    SP.utils.saveDraft({
-      key: draftKey(),
-      answers: state.answers,
-      currentIndex: state.currentIndex
-    });
+    SP.utils.saveDraft({ key: draftKey(), answers: state.answers, currentIndex: state.currentIndex });
   }
   function restoreDraft() {
     const draft = SP.utils.loadDraft();
     const user  = SP.utils.loadUser();
-    if (user && user.id) state.user = user;
+    if (user && user.id && user.assignedUserId) state.user = user;
     if (draft && draft.key === draftKey() && draft.answers) {
       state.answers = draft.answers;
       state.currentIndex = Math.min(draft.currentIndex || 0, state.questions.length - 1);
@@ -136,12 +108,12 @@
   // -------------------------------------------------------
   function populateAssignedUserOptions() {
     if (!el.assignedUser) return;
-    const users = Array.isArray(CFG.ASSIGNED_USERS) ? CFG.ASSIGNED_USERS : [];
-    // Keep the "Choose..." placeholder and append the six options
-    const opts = users.map((u) =>
-      `<option value="${SP.utils.escapeHtml(u.value)}">${SP.utils.escapeHtml(u.label)}</option>`
-    ).join("");
-    el.assignedUser.insertAdjacentHTML("beforeend", opts);
+    for (const u of pollUsers) {
+      const opt = document.createElement("option");
+      opt.value = u.id;
+      opt.textContent = u.display_name;
+      el.assignedUser.appendChild(opt);
+    }
   }
 
   function wireIdentity() {
@@ -149,42 +121,35 @@
     el.identityForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       el.identityError.textContent = "";
-      const fullName     = (el.fullName.value || "").trim();
-      const assignedUser = (el.assignedUser && el.assignedUser.value) || "";
+      const fullName = (el.fullName.value || "").trim();
+      const chosenId = (el.assignedUser && el.assignedUser.value) || "";
+      const chosenLabel = (el.assignedUser && el.assignedUser.selectedOptions[0]?.textContent) || "";
 
-      if (!fullName) {
-        el.identityError.textContent = "Please enter your full name.";
-        el.fullName.focus();
-        return;
-      }
-      if (!assignedUser) {
-        el.identityError.textContent = "Please select a user before continuing.";
-        el.assignedUser && el.assignedUser.focus();
-        return;
-      }
+      if (!fullName) { el.identityError.textContent = "Please enter your full name."; el.fullName.focus(); return; }
+      if (!chosenId) { el.identityError.textContent = "Please select a user."; el.assignedUser.focus(); return; }
 
       const submitBtn = el.identityForm.querySelector("button[type='submit']");
-      submitBtn.disabled = true;
-      submitBtn.textContent = "Starting...";
+      submitBtn.disabled = true; submitBtn.textContent = "Starting...";
       try {
         const sessionId = SP.utils.getSessionId();
         const user = await SP.db.createUser({ fullName, sessionId });
-        state.user = { id: user.id, fullName: user.full_name, assignedUser };
+        state.user = {
+          id: user.id, fullName: user.full_name,
+          assignedUserId: chosenId, assignedUserLabel: chosenLabel
+        };
         SP.utils.saveUser(state.user);
-        submitBtn.disabled = false;
-        submitBtn.textContent = "Start Poll";
+        submitBtn.disabled = false; submitBtn.textContent = "Start Poll";
         showQuestion();
       } catch (err) {
         console.error(err);
         el.identityError.textContent = friendlyError(err, "Could not start the poll. Please try again.");
-        submitBtn.disabled = false;
-        submitBtn.textContent = "Start Poll";
+        submitBtn.disabled = false; submitBtn.textContent = "Start Poll";
       }
     });
   }
 
   // -------------------------------------------------------
-  // Question rendering
+  // Question rendering (MCQ or text)
   // -------------------------------------------------------
   function renderQuestion() {
     const idx = state.currentIndex;
@@ -198,10 +163,23 @@
     el.progressLabel.textContent = `Question ${idx + 1} of ${total}`;
 
     el.qText.textContent = q.text;
+    el.qRequired.textContent = q.required ? "Required" : "Optional";
+    el.qRequired.classList.toggle("sp-q-required--yes", q.required);
+    el.qRequired.classList.toggle("sp-q-required--no", !q.required);
 
-    el.qOptions.innerHTML = "";
-    const selected = state.answers[q.id]?.optionId;
+    el.qBody.innerHTML = "";
+    if (q.type === "text_input") renderTextAnswer(q);
+    else                          renderMcqAnswer(q);
 
+    el.backBtn.disabled = idx === 0;
+    updateNavState();
+    el.nextBtn.textContent = isLast ? (state.submitting ? "Submitting..." : "Submit") : "Next";
+    // Skip is visible only for optional questions
+    el.skipBtn.classList.toggle("is-hidden", q.required);
+  }
+
+  function renderMcqAnswer(q) {
+    const selected = state.answers[q.id] && state.answers[q.id].optionId;
     q.options.forEach((opt) => {
       const id = `opt-${q.id}-${opt.id}`;
       const wrap = document.createElement("label");
@@ -216,41 +194,83 @@
       wrap.querySelector("input").addEventListener("change", () => {
         state.answers[q.id] = { optionId: opt.id, optionText: opt.text };
         saveDraft();
-        document.querySelectorAll(".sp-option").forEach((n) => n.classList.remove("sp-option--selected"));
+        el.qBody.querySelectorAll(".sp-option").forEach((n) => n.classList.remove("sp-option--selected"));
         wrap.classList.add("sp-option--selected");
-        el.nextBtn.disabled = false;
+        updateNavState();
       });
-      el.qOptions.appendChild(wrap);
+      el.qBody.appendChild(wrap);
     });
+  }
 
-    el.backBtn.disabled = idx === 0;
-    el.nextBtn.disabled = !state.answers[q.id] || state.submitting;
-    el.nextBtn.textContent = isLast ? (state.submitting ? "Submitting..." : "Submit") : "Next";
-    el.submitError.textContent = "";
+  function renderTextAnswer(q) {
+    const cur = (state.answers[q.id] && state.answers[q.id].textAnswer) || "";
+    const wrap = document.createElement("div");
+    wrap.className = "sp-text-answer";
+    wrap.innerHTML = `
+      <textarea class="sp-input sp-input--area sp-text-answer__area"
+                maxlength="${TEXT_MAX}" rows="4"
+                placeholder="Type your answer..."
+                aria-label="Your answer"></textarea>
+      <div class="sp-text-answer__foot">
+        <span class="sp-counter" data-text-counter>${cur.length} / ${TEXT_MAX}</span>
+      </div>
+    `;
+    const ta = wrap.querySelector("textarea");
+    const counter = wrap.querySelector("[data-text-counter]");
+    ta.value = cur;
+    ta.addEventListener("input", () => {
+      const val = ta.value;
+      counter.textContent = `${val.length} / ${TEXT_MAX}`;
+      if (val.trim()) state.answers[q.id] = { textAnswer: val };
+      else delete state.answers[q.id];
+      saveDraft();
+      updateNavState();
+    });
+    el.qBody.appendChild(wrap);
+    setTimeout(() => ta.focus(), 60);
+  }
+
+  function updateNavState() {
+    const q = state.questions[state.currentIndex];
+    const ans = state.answers[q.id];
+    const hasAnswer = !!ans && (
+      (q.type === "single_select" && ans.optionId) ||
+      (q.type === "text_input" && (ans.textAnswer || "").trim())
+    );
+    el.nextBtn.disabled = (q.required && !hasAnswer) || state.submitting;
   }
 
   function wireNavigation() {
     el.backBtn.addEventListener("click", () => {
       if (state.currentIndex > 0) {
-        state.currentIndex -= 1;
-        saveDraft();
-        renderQuestion();
+        state.currentIndex -= 1; saveDraft(); renderQuestion();
       }
     });
-    el.nextBtn.addEventListener("click", async () => {
-      const idx = state.currentIndex;
-      const q = state.questions[idx];
-      if (!state.answers[q.id]) return;
+    el.skipBtn.addEventListener("click", () => {
+      const q = state.questions[state.currentIndex];
+      if (q.required) return;
+      delete state.answers[q.id];
+      advanceOrSubmit();
+    });
+    el.nextBtn.addEventListener("click", () => advanceOrSubmit());
+  }
 
-      if (idx < state.questions.length - 1) {
-        state.currentIndex += 1;
-        saveDraft();
-        renderQuestion();
-        window.scrollTo({ top: 0, behavior: "smooth" });
-      } else {
-        await submitPoll();
-      }
-    });
+  function advanceOrSubmit() {
+    const idx = state.currentIndex;
+    const q = state.questions[idx];
+    const ans = state.answers[q.id];
+    const hasAnswer = !!ans && (
+      (q.type === "single_select" && ans.optionId) ||
+      (q.type === "text_input" && (ans.textAnswer || "").trim())
+    );
+    if (q.required && !hasAnswer) return;
+
+    if (idx < state.questions.length - 1) {
+      state.currentIndex += 1; saveDraft(); renderQuestion();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } else {
+      submitPoll();
+    }
   }
 
   // -------------------------------------------------------
@@ -259,19 +279,22 @@
   async function submitPoll() {
     if (state.submitting || state.submitted) return;
     state.submitting = true;
-    el.nextBtn.disabled = true;
-    el.backBtn.disabled = true;
+    el.nextBtn.disabled = true; el.backBtn.disabled = true;
     el.nextBtn.textContent = "Submitting...";
-    el.submitError.textContent = "";
 
     try {
       const payload = state.questions.map((q) => {
         const a = state.answers[q.id];
-        return { questionId: q.id, optionId: a.optionId, optionText: a.optionText };
+        if (!a) return { questionId: q.id, skipped: true };
+        if (q.type === "single_select") {
+          return { questionId: q.id, optionId: a.optionId, optionText: a.optionText };
+        }
+        return { questionId: q.id, textAnswer: (a.textAnswer || "").trim() };
       });
+
       await SP.db.submitPoll({
         userId: state.user.id,
-        assignedUser: state.user.assignedUser,
+        assignedUserId: state.user.assignedUserId,
         answers: payload
       });
 
@@ -283,10 +306,9 @@
     } catch (err) {
       console.error(err);
       state.submitting = false;
-      el.nextBtn.disabled = false;
-      el.backBtn.disabled = false;
+      el.nextBtn.disabled = false; el.backBtn.disabled = false;
       el.nextBtn.textContent = "Submit";
-      el.submitError.textContent = friendlyError(err, "Could not submit right now. Please try again.");
+      alert(friendlyError(err, "Could not submit right now."));
     }
   }
 
@@ -294,10 +316,9 @@
     const msg = (err && (err.message || err.error_description)) || "";
     if (/Supabase URL not configured|Supabase client library not loaded/i.test(msg))
       return "App is not configured yet. Add your Supabase keys in js/config.js.";
-    if (/row-level security|RLS/i.test(msg)) return "Database blocked the write (RLS). Re-run supabase-schema.sql.";
-    if (/Invalid API key|JWT|401/i.test(msg)) return "Invalid Supabase anon key.";
-    if (/relation .* does not exist|schema cache/i.test(msg)) return "Database tables missing. Run supabase-schema.sql.";
-    if (/Failed to fetch|NetworkError/i.test(msg)) return "Network issue. Please try again in a moment.";
+    if (/Failed to fetch|NetworkError/i.test(msg)) return "Network issue. Please try again.";
+    if (/function .* does not exist/i.test(msg)) return "Database is out of date. Re-run supabase-schema.sql.";
+    if (/row-level security/i.test(msg)) return "Database blocked the write. Re-run supabase-schema.sql.";
     return fallback + (msg ? " (" + msg + ")" : "");
   }
 })();

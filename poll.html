@@ -66,17 +66,16 @@
         </div>
       </div>
 
-      <h1 id="q-title" class="sp-q-title" data-question-text>Loading question...</h1>
+      <div class="sp-q-head">
+        <h1 id="q-title" class="sp-q-title" data-question-text>Loading question...</h1>
+        <span class="sp-q-required" data-question-required>Required</span>
+      </div>
 
-      <fieldset class="sp-options">
-        <legend class="sp-visually-hidden">Choose one</legend>
-        <div class="sp-options__list" data-question-options></div>
-      </fieldset>
-
-      <p class="sp-error" data-submit-error role="alert"></p>
+      <div class="sp-q-body" data-question-body></div>
 
       <div class="sp-nav">
         <button class="sp-btn sp-btn--ghost" type="button" data-nav-back>Back</button>
+        <button class="sp-btn sp-btn--ghost is-hidden" type="button" data-nav-skip>Skip</button>
         <button class="sp-btn sp-btn--primary" type="button" data-nav-next disabled>Next</button>
       </div>
     </section>
@@ -117,10 +116,10 @@
   </footer>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-  <script src="js/config.js?v=3"></script>
-  <script src="js/utils.js?v=3"></script>
-  <script src="js/supabase.js?v=3"></script>
-  <script src="js/poll.js?v=3"></script>
+  <script src="js/config.js?v=4"></script>
+  <script src="js/utils.js?v=4"></script>
+  <script src="js/supabase.js?v=4"></script>
+  <script src="js/poll.js?v=4"></script>
   <script>document.querySelector("[data-year]").textContent = new Date().getFullYear();</script>
 </body>
 </html>

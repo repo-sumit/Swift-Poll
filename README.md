@@ -107,7 +107,43 @@ Option B - GitHub:
 
 ---
 
-## 6b. User segmentation
+## 6b. Roles, accounts, and admin workflows
+
+Swift Poll has two dashboard roles:
+
+- **Admin** - full access: manage questions, manage dashboard users, delete individual responses, export CSV, reset poll data.
+- **User** - limited to their own scope: sees only submissions tagged to their account, no admin controls.
+
+### Default seeded credentials
+
+After you run [supabase-schema.sql](supabase-schema.sql) the `dashboard_users` table is seeded with:
+
+| Display name | Role  | Password |
+|---|---|---|
+| Admin  | admin | `1234` |
+| User 1 | user  | `user` |
+| User 2 | user  | `user` |
+| User 3 | user  | `user` |
+| User 4 | user  | `user` |
+| User 5 | user  | `user` |
+| User 6 | user  | `user` |
+
+Change these immediately in production: log in as Admin -> **Manage users** -> **Password**.
+
+### Admin actions
+
+- **Manage questions**: add MCQ (2-5 options) or text-input questions, mark required/optional, soft-delete.
+- **Manage users**: add / rename / change password / deactivate. The DB refuses to deactivate the last active admin.
+- **Delete a response**: click Delete on any row in **User-wise responses**. Removes the submission and its answers (cascade).
+- **Reset**: opens a modal that first downloads a CSV of every submission, then calls `dashboard_reset_data` which wipes questions, options, submissions, and answers. Polls and dashboard users are kept. Type `RESET` to confirm.
+
+### Security tradeoffs
+
+- Passwords are hashed with **bcrypt** via `pgcrypto.crypt()` inside `security definer` RPCs. Anon clients cannot read `dashboard_users` directly - `password_hash` never leaves the database.
+- Admin-only actions (create question, delete submission, reset) rely on RLS that allows anon writes + client-side role gating. A sufficiently determined caller with the anon key can still bypass the UI checks. For true role enforcement, migrate to **Supabase Auth** with role-scoped RLS.
+- The dashboard session lives only in `sessionStorage` (one tab lifetime). No remember-me.
+
+
 
 Swift Poll ships with a built-in "pick which user you are" dimension so you can split one poll across six audiences without needing proper auth.
 
