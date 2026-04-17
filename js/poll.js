@@ -245,9 +245,13 @@
   // -------------------------------------------------------
   function friendlyError(err, fallback) {
     const msg = (err && (err.message || err.error_description)) || "";
-    if (/not configured/i.test(msg)) return "App is not configured yet. Add your Supabase keys in js/config.js.";
-    if (/fetch|network|failed/i.test(msg)) return "Network issue. Please try again in a moment.";
-    if (/not found/i.test(msg)) return "Poll data missing in Supabase. Re-run supabase-schema.sql.";
-    return fallback;
+    if (/Supabase URL not configured|Supabase client library not loaded/i.test(msg))
+      return "App is not configured yet. Add your Supabase keys in js/config.js.";
+    if (/row-level security|RLS/i.test(msg)) return "Database blocked the write (RLS). Re-run supabase-schema.sql to apply policies.";
+    if (/Invalid API key|JWT|401/i.test(msg)) return "Invalid Supabase anon key. Copy the anon public key from Project Settings -> API.";
+    if (/relation .* does not exist|schema cache/i.test(msg)) return "Database tables missing. Run supabase-schema.sql in the SQL editor.";
+    if (/Failed to fetch|NetworkError/i.test(msg)) return "Network issue. Please try again in a moment.";
+    // Surface the raw message so we can see what is wrong in the wild
+    return fallback + (msg ? " (" + msg + ")" : "");
   }
 })();

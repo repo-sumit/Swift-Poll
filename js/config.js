@@ -16,8 +16,8 @@ window.SWIFT_POLL_CONFIG = {
   // -------------------------------------------------------
   // Supabase
   // -------------------------------------------------------
-  SUPABASE_URL: "https://YOUR-PROJECT-REF.supabase.co",
-  SUPABASE_ANON_KEY: "YOUR-ANON-PUBLIC-KEY",
+  SUPABASE_URL: "https://bvrvlpokcdcxmaoxqtgs.supabase.co",
+  SUPABASE_ANON_KEY: "sb_publishable_VE-wVyIHXiDYO2zIf2ogqA_72BHW7nR",
 
   // -------------------------------------------------------
   // Branding
@@ -37,7 +37,7 @@ window.SWIFT_POLL_CONFIG = {
   // -------------------------------------------------------
   // Empty string = public dashboard. Set a value to require a
   // passcode (stored in localStorage after first entry).
-  DASHBOARD_PASSCODE: "",
+  DASHBOARD_PASSCODE: "1234",
 
   // -------------------------------------------------------
   // Shared option set - used by every question below

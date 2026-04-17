@@ -253,8 +253,11 @@
 
   function friendlyError(err, fallback) {
     const msg = (err && (err.message || err.error_description)) || "";
-    if (/not configured/i.test(msg)) return "App is not configured yet. Add your Supabase keys in js/config.js.";
-    if (/fetch|network|failed/i.test(msg)) return "Network issue. Please try again in a moment.";
-    return fallback;
+    if (/Supabase URL not configured|Supabase client library not loaded/i.test(msg))
+      return "App is not configured yet. Add your Supabase keys in js/config.js.";
+    if (/Invalid API key|JWT|401/i.test(msg)) return "Invalid Supabase anon key.";
+    if (/relation .* does not exist|schema cache/i.test(msg)) return "Database tables missing. Run supabase-schema.sql.";
+    if (/Failed to fetch|NetworkError/i.test(msg)) return "Network issue. Please try again in a moment.";
+    return fallback + (msg ? " (" + msg + ")" : "");
   }
 })();
