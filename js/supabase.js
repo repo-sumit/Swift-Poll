@@ -225,15 +225,22 @@ SP.db = (function () {
   /**
    * @param {Object} args
    * @param {string} args.userId
+   * @param {string} args.assignedUser - one of user_1 .. user_6
    * @param {Array<{questionId:string, optionId:string, optionText:string}>} args.answers
    */
-  async function submitPoll({ userId, answers }) {
+  async function submitPoll({ userId, assignedUser, answers }) {
+    if (!assignedUser) throw new Error("assigned_user is required");
     const supa = init();
     const poll = await getPoll();
 
     const { data: submission, error: subErr } = await supa
       .from("submissions")
-      .insert({ poll_id: poll.id, user_id: userId, status: "submitted" })
+      .insert({
+        poll_id: poll.id,
+        user_id: userId,
+        assigned_user: assignedUser,
+        status: "submitted"
+      })
       .select("id, submitted_at")
       .single();
     if (subErr) throw subErr;
@@ -253,25 +260,35 @@ SP.db = (function () {
   // -------------------------------------------------------
   // Dashboard
   // -------------------------------------------------------
-  async function getAggregatedResults() {
+  // `filter.assignedUser` may be undefined / "all" (no filter)
+  // or one of user_1 .. user_6 (scope to that user).
+  function resolveAssignedUserFilter(filter) {
+    const v = filter && filter.assignedUser;
+    if (!v || v === "all") return null;
+    return v;
+  }
+
+  async function getAggregatedResults(filter) {
     const supa = init();
     const poll = await getPoll();
     const questions = await getActiveQuestions();
+    const assignedUser = resolveAssignedUserFilter(filter);
 
-    // Deep copy so we can annotate counts without mutating the cache
     const scaffold = questions.map((q) => ({
       id: q.id, text: q.text, order: q.order,
       options: q.options.map((o) => ({ id: o.id, text: o.text, value: o.value, order: o.order, count: 0 }))
     }));
 
-    // Active option ids (for filtering answers to deleted options)
     const activeOptionIds = new Set();
     for (const q of scaffold) for (const o of q.options) activeOptionIds.add(o.id);
 
-    const { data: rows, error } = await supa
+    let query = supa
       .from("answers")
-      .select("selected_option_id, question_id, submission:submissions!inner(poll_id)")
+      .select("selected_option_id, question_id, submission:submissions!inner(poll_id, assigned_user)")
       .eq("submission.poll_id", poll.id);
+    if (assignedUser) query = query.eq("submission.assigned_user", assignedUser);
+
+    const { data: rows, error } = await query;
     if (error) throw error;
 
     const byOption = new Map();
@@ -287,16 +304,18 @@ SP.db = (function () {
     return { poll, questions: scaffold };
   }
 
-  async function getUserResponses() {
+  async function getUserResponses(filter) {
     const supa = init();
     const poll = await getPoll();
+    const assignedUser = resolveAssignedUserFilter(filter);
 
-    const { data, error } = await supa
+    let query = supa
       .from("submissions")
       .select(`
         id,
         submitted_at,
         status,
+        assigned_user,
         user:users ( id, full_name, contact_value, session_id ),
         answers (
           question_id,
@@ -306,17 +325,25 @@ SP.db = (function () {
       `)
       .eq("poll_id", poll.id)
       .order("submitted_at", { ascending: false });
+    if (assignedUser) query = query.eq("assigned_user", assignedUser);
+
+    const { data, error } = await query;
     if (error) throw error;
     return data || [];
   }
 
-  async function getTotalSubmissions() {
+  async function getTotalSubmissions(filter) {
     const supa = init();
     const poll = await getPoll();
-    const { count, error } = await supa
+    const assignedUser = resolveAssignedUserFilter(filter);
+
+    let query = supa
       .from("submissions")
       .select("id", { count: "exact", head: true })
       .eq("poll_id", poll.id);
+    if (assignedUser) query = query.eq("assigned_user", assignedUser);
+
+    const { count, error } = await query;
     if (error) throw error;
     return count || 0;
   }

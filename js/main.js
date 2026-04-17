@@ -17,7 +17,8 @@
       btn.addEventListener("click", () => { window.location.href = "poll.html"; });
     });
     document.querySelectorAll("[data-cta='dashboard']").forEach((btn) => {
-      btn.addEventListener("click", () => { window.location.href = "dashboard.html"; });
+      btn.addEventListener("click", () => { window.location.href = "dashboard-access.html"; });
     });
   });
 })();
+

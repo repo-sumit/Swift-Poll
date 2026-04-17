@@ -15,7 +15,7 @@
       <span class="sp-header__name" data-brand-name>Swift Poll</span>
     </a>
     <nav class="sp-header__nav" aria-label="Primary">
-      <a href="dashboard.html" class="sp-link">Dashboard</a>
+      <a href="dashboard-access.html" class="sp-link">Dashboard</a>
     </nav>
   </header>
 
@@ -31,6 +31,14 @@
           <span class="sp-field__label">Full name <span class="sp-req">*</span></span>
           <input class="sp-input" name="fullName" type="text" autocomplete="name"
                  placeholder="e.g. Ananya Sharma" required maxlength="120" />
+        </label>
+
+        <label class="sp-field">
+          <span class="sp-field__label">Select user <span class="sp-req">*</span></span>
+          <select class="sp-input sp-select" name="assignedUser" required
+                  data-assigned-user-select>
+            <option value="">Choose...</option>
+          </select>
         </label>
 
         <p class="sp-error" data-identity-error role="alert"></p>
@@ -80,7 +88,7 @@
         No active questions are available. The admin can add questions from the dashboard.
       </p>
       <div class="sp-cta-row">
-        <a class="sp-btn sp-btn--primary" href="dashboard.html">Open Dashboard</a>
+        <a class="sp-btn sp-btn--primary" href="dashboard-access.html">Open Dashboard</a>
         <a class="sp-btn sp-btn--ghost" href="index.html">Back to Home</a>
       </div>
     </section>
@@ -97,7 +105,7 @@
       <p class="sp-card__subtitle">Your responses have been saved. You can now view how everyone else voted.</p>
 
       <div class="sp-cta-row">
-        <a class="sp-btn sp-btn--primary" href="dashboard.html" data-go-dashboard>View Dashboard</a>
+        <a class="sp-btn sp-btn--primary" href="dashboard-access.html" data-go-dashboard>View Dashboard</a>
         <a class="sp-btn sp-btn--ghost" href="index.html" data-go-home>Back to Home</a>
       </div>
     </section>
@@ -109,10 +117,10 @@
   </footer>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-  <script src="js/config.js?v=2"></script>
-  <script src="js/utils.js?v=2"></script>
-  <script src="js/supabase.js?v=2"></script>
-  <script src="js/poll.js?v=2"></script>
+  <script src="js/config.js?v=3"></script>
+  <script src="js/utils.js?v=3"></script>
+  <script src="js/supabase.js?v=3"></script>
+  <script src="js/poll.js?v=3"></script>
   <script>document.querySelector("[data-year]").textContent = new Date().getFullYear();</script>
 </body>
 </html>

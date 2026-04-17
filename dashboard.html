@@ -32,7 +32,19 @@
         <button class="sp-btn sp-btn--primary sp-btn--sm" type="button" data-export-csv>
           Export CSV
         </button>
+        <button class="sp-btn sp-btn--ghost sp-btn--sm" type="button" data-logout>
+          Log out
+        </button>
       </div>
+    </section>
+
+    <section class="sp-filter-bar" aria-label="Response filter">
+      <label class="sp-filter-bar__label" for="filter-assigned-user">View responses for</label>
+      <select id="filter-assigned-user" class="sp-input sp-select sp-filter-bar__select"
+              data-filter-user>
+        <option value="all">All Users</option>
+      </select>
+      <span class="sp-filter-bar__hint" data-filter-hint></span>
     </section>
 
     <section class="sp-stats" aria-label="Summary">
@@ -162,10 +174,10 @@
   </footer>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-  <script src="js/config.js?v=2"></script>
-  <script src="js/utils.js?v=2"></script>
-  <script src="js/supabase.js?v=2"></script>
-  <script src="js/dashboard.js?v=2"></script>
+  <script src="js/config.js?v=3"></script>
+  <script src="js/utils.js?v=3"></script>
+  <script src="js/supabase.js?v=3"></script>
+  <script src="js/dashboard.js?v=3"></script>
   <script>document.querySelector("[data-year]").textContent = new Date().getFullYear();</script>
 </body>
 </html>

@@ -1,24 +1,30 @@
 /**
  * Swift Poll - dashboard renderer + admin controller.
  *
- * Sections:
- *   - Manage Questions (admin): add + soft-delete
- *   - Aggregated results
- *   - User-wise responses (table on desktop, cards on mobile)
+ * Entry:
+ *   - Requires sessionStorage.dashboardUser to be set; otherwise
+ *     redirects to dashboard-access.html.
  *
- * After every admin mutation we:
- *   1. invalidate the Supabase cache
- *   2. re-render the admin list
- *   3. re-run aggregates + user responses
- * so the entire page stays consistent with the DB.
+ * Filter:
+ *   - Top-of-page dropdown controls the assigned_user scope.
+ *   - Default value = the user chosen on the access page.
+ *   - Switching the filter re-runs all dashboard queries so
+ *     totals, aggregates, user-wise responses, and CSV export
+ *     stay consistent.
+ *
+ * Admin:
+ *   - Manage Questions section (add / soft-delete) is global;
+ *     changes affect all users.
  */
 (function () {
   const CFG = window.SWIFT_POLL_CONFIG || {};
+  const SESSION_KEY = "dashboardUser";
 
   let el = {};
-  let lastUserRows = [];        // retained for CSV export
-  let activeQuestions = [];     // canonical ordered active list
+  let lastUserRows = [];
+  let activeQuestions = [];
   let pendingDeleteId = null;
+  let currentFilter = "all";        // "all" or user_1..user_6
 
   document.addEventListener("DOMContentLoaded", async () => {
     SP.utils.setHeaderBrand();
@@ -32,6 +38,11 @@
       errorBox:       document.querySelector("[data-error]"),
       refreshBtn:     document.querySelector("[data-refresh]"),
       exportBtn:      document.querySelector("[data-export-csv]"),
+      logoutBtn:      document.querySelector("[data-logout]"),
+
+      // Filter
+      filterSelect:   document.querySelector("[data-filter-user]"),
+      filterHint:     document.querySelector("[data-filter-hint]"),
 
       // Admin
       addForm:        document.querySelector("[data-add-question-form]"),
@@ -52,7 +63,9 @@
 
     el.refreshBtn && el.refreshBtn.addEventListener("click", loadAll);
     el.exportBtn  && el.exportBtn.addEventListener("click", exportCsv);
+    el.logoutBtn  && el.logoutBtn.addEventListener("click", logout);
 
+    setupFilter();
     wireAdminForm();
     wireModal();
 
@@ -60,24 +73,76 @@
   });
 
   // -------------------------------------------------------
-  // Passcode gate
+  // Session gate - must have a dashboardUser in sessionStorage.
+  // Otherwise kick back to the access page.
   // -------------------------------------------------------
   function gateDashboard() {
-    const pass = (CFG.DASHBOARD_PASSCODE || "").trim();
-    if (!pass) return true;
-    const stored = localStorage.getItem(SP.utils.STORAGE_KEYS.DASH_AUTH);
-    if (stored === pass) return true;
-    const entered = window.prompt("Enter dashboard passcode:");
-    if (entered && entered === pass) {
-      localStorage.setItem(SP.utils.STORAGE_KEYS.DASH_AUTH, entered);
-      return true;
+    const sessionUser = sessionStorage.getItem(SESSION_KEY);
+    if (!sessionUser) {
+      window.location.replace("dashboard-access.html");
+      return false;
     }
-    document.body.innerHTML = '<div class="sp-gate">Access denied.</div>';
-    return false;
+    currentFilter = sessionUser;
+    return true;
+  }
+
+  function logout() {
+    sessionStorage.removeItem(SESSION_KEY);
+    try {
+      if (SP.utils.STORAGE_KEYS && SP.utils.STORAGE_KEYS.DASH_AUTH) {
+        localStorage.removeItem(SP.utils.STORAGE_KEYS.DASH_AUTH);
+      }
+    } catch (_) {}
+    window.location.replace("dashboard-access.html");
   }
 
   // -------------------------------------------------------
-  // Main loader
+  // Filter bar
+  // -------------------------------------------------------
+  function setupFilter() {
+    if (!el.filterSelect) return;
+
+    const users = Array.isArray(CFG.ASSIGNED_USERS) ? CFG.ASSIGNED_USERS : [];
+    for (const u of users) {
+      const opt = document.createElement("option");
+      opt.value = u.value;
+      opt.textContent = u.label;
+      el.filterSelect.appendChild(opt);
+    }
+
+    // Default to the user from session; "all" stays the default
+    // if the session chose "all" or the value is unknown.
+    const known = new Set(["all", ...users.map((u) => u.value)]);
+    el.filterSelect.value = known.has(currentFilter) ? currentFilter : "all";
+    currentFilter = el.filterSelect.value;
+    updateFilterHint();
+
+    el.filterSelect.addEventListener("change", async () => {
+      currentFilter = el.filterSelect.value || "all";
+      // Persist so refresh shows the same scope
+      sessionStorage.setItem(SESSION_KEY, currentFilter);
+      updateFilterHint();
+      await loadAll();
+    });
+  }
+
+  function updateFilterHint() {
+    if (!el.filterHint) return;
+    const users = Array.isArray(CFG.ASSIGNED_USERS) ? CFG.ASSIGNED_USERS : [];
+    if (currentFilter === "all") {
+      el.filterHint.textContent = "Showing data from every user.";
+    } else {
+      const match = users.find((u) => u.value === currentFilter);
+      el.filterHint.textContent = match
+        ? `Showing data tagged to ${match.label}.`
+        : "Showing filtered data.";
+    }
+  }
+
+  function currentFilterObject() { return { assignedUser: currentFilter }; }
+
+  // -------------------------------------------------------
+  // Main loader (re-used on refresh and on filter change)
   // -------------------------------------------------------
   async function loadAll() {
     showLoading(true);
@@ -86,12 +151,13 @@
 
     try {
       SP.db.invalidateCache();
+      const filter = currentFilterObject();
 
       const [questions, agg, users, total] = await Promise.all([
         SP.db.getActiveQuestions(),
-        SP.db.getAggregatedResults(),
-        SP.db.getUserResponses(),
-        SP.db.getTotalSubmissions()
+        SP.db.getAggregatedResults(filter),
+        SP.db.getUserResponses(filter),
+        SP.db.getTotalSubmissions(filter)
       ]);
 
       activeQuestions = questions;
@@ -104,6 +170,7 @@
         el.aggregates.innerHTML = "";
         el.users.innerHTML = "";
         el.empty.classList.remove("is-hidden");
+        tweakEmptyMessage();
       } else {
         renderAggregates(agg.questions);
         renderUsers(users, activeQuestions);
@@ -116,6 +183,21 @@
     }
   }
 
+  function tweakEmptyMessage() {
+    const h2 = el.empty.querySelector("h2");
+    const p  = el.empty.querySelector("p");
+    if (!h2 || !p) return;
+    if (currentFilter !== "all") {
+      const users = Array.isArray(CFG.ASSIGNED_USERS) ? CFG.ASSIGNED_USERS : [];
+      const match = users.find((u) => u.value === currentFilter);
+      h2.textContent = `No responses for ${match ? match.label : "this user"} yet`;
+      p.textContent  = "Switch the filter to see other users, or share the poll link to collect more responses.";
+    } else {
+      h2.textContent = "No responses yet";
+      p.textContent  = "Once users submit the poll, their results will show up here in real time.";
+    }
+  }
+
   function showLoading(on) { el.loading && el.loading.classList.toggle("is-hidden", !on); }
 
   // -------------------------------------------------------
@@ -124,7 +206,6 @@
   function wireAdminForm() {
     if (!el.addForm) return;
 
-    // Live character counters
     el.addForm.querySelectorAll("[data-counter-for]").forEach((counter) => {
       const name = counter.getAttribute("data-counter-for");
       const input = el.addForm.querySelector(`[name='${name}']`);
@@ -298,14 +379,20 @@
   // -------------------------------------------------------
   // User-wise responses
   // -------------------------------------------------------
+  function userLabel(value) {
+    const users = Array.isArray(CFG.ASSIGNED_USERS) ? CFG.ASSIGNED_USERS : [];
+    const match = users.find((u) => u.value === value);
+    return match ? match.label : (value || "-");
+  }
+
   function renderUsers(submissions, questions) {
     const activeIds = new Set(questions.map((q) => q.id));
 
-    // Desktop table
     const tableHead = `
       <thead>
         <tr>
           <th>User</th>
+          <th>Scope</th>
           <th>Submitted</th>
           ${questions.map((q, i) => `<th title="${SP.utils.escapeHtml(q.text)}">Q${i + 1}</th>`).join("")}
         </tr>
@@ -317,11 +404,13 @@
           byQ[a.question_id] = a.selected_option_text;
         }
       });
-      const name = s.user?.full_name || "Anonymous";
-      const when = SP.utils.formatDate(s.submitted_at);
+      const name  = s.user?.full_name || "Anonymous";
+      const scope = userLabel(s.assigned_user);
+      const when  = SP.utils.formatDate(s.submitted_at);
       const cells = questions.map((q) => `<td>${SP.utils.escapeHtml(byQ[q.id] || "-")}</td>`).join("");
       return `<tr>
         <td>${SP.utils.escapeHtml(name)}</td>
+        <td class="sp-muted">${SP.utils.escapeHtml(scope)}</td>
         <td class="sp-muted">${SP.utils.escapeHtml(when)}</td>
         ${cells}
       </tr>`;
@@ -332,7 +421,6 @@
         <table class="sp-table">${tableHead}<tbody>${rows}</tbody></table>
       </div>`;
 
-    // Mobile cards
     const cardsHtml = submissions.map((s) => {
       const byQ = {};
       (s.answers || []).forEach((a) => {
@@ -344,12 +432,14 @@
         <li><span class="sp-user-card__q">Q${i + 1}.</span>
           <span class="sp-user-card__a">${SP.utils.escapeHtml(byQ[q.id] || "-")}</span>
         </li>`).join("");
-      const name = s.user?.full_name || "Anonymous";
+      const name  = s.user?.full_name || "Anonymous";
+      const scope = userLabel(s.assigned_user);
       return `
         <article class="sp-user-card">
           <header class="sp-user-card__head">
             <div>
               <h4 class="sp-user-card__name">${SP.utils.escapeHtml(name)}</h4>
+              <p class="sp-user-card__meta">${SP.utils.escapeHtml(scope)}</p>
             </div>
             <time class="sp-user-card__time">${SP.utils.escapeHtml(SP.utils.formatDate(s.submitted_at))}</time>
           </header>
@@ -363,7 +453,7 @@
   }
 
   // -------------------------------------------------------
-  // CSV export
+  // CSV export - filter-aware
   // -------------------------------------------------------
   function exportCsv() {
     if (!lastUserRows.length) {
@@ -373,7 +463,7 @@
     const questions = activeQuestions;
     const activeIds = new Set(questions.map((q) => q.id));
 
-    const header = ["Name", "Submitted At", ...questions.map((_, i) => "Q" + (i + 1))];
+    const header = ["Name", "Scope", "Submitted At", ...questions.map((_, i) => "Q" + (i + 1))];
     const lines = [header.map(csvEscape).join(",")];
     for (const s of lastUserRows) {
       const byQ = {};
@@ -382,6 +472,7 @@
       });
       const row = [
         s.user?.full_name || "Anonymous",
+        userLabel(s.assigned_user),
         SP.utils.formatDate(s.submitted_at),
         ...questions.map((q) => byQ[q.id] || "")
       ];
@@ -391,7 +482,8 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `swift-poll-responses-${new Date().toISOString().slice(0, 10)}.csv`;
+    const scopeSuffix = currentFilter === "all" ? "all" : currentFilter;
+    a.download = `swift-poll-${scopeSuffix}-${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(a);
     a.click();
     a.remove();

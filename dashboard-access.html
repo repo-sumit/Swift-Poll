@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#2563eb" />
+  <title>Swift Poll - Dashboard access</title>
+  <link rel="icon" href="https://i.ibb.co/LDdkBqsS/image-4.png" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body class="sp-body sp-body--access">
+  <header class="sp-header">
+    <a href="index.html" class="sp-header__brand" aria-label="Swift Poll home">
+      <img data-brand-logo alt="Swift Poll" class="sp-header__logo" />
+      <span class="sp-header__name" data-brand-name>Swift Poll</span>
+    </a>
+    <nav class="sp-header__nav" aria-label="Primary">
+      <a href="index.html" class="sp-link">Home</a>
+    </nav>
+  </header>
+
+  <main class="sp-main">
+    <section class="sp-card sp-card--poll" aria-labelledby="access-title">
+      <h1 id="access-title" class="sp-card__title">Dashboard access</h1>
+      <p class="sp-card__subtitle">Pick the user you want to view and enter the password.</p>
+
+      <form class="sp-form" data-access-form novalidate>
+        <label class="sp-field">
+          <span class="sp-field__label">Select user <span class="sp-req">*</span></span>
+          <select class="sp-input sp-select" name="accessUser" required
+                  data-access-user-select>
+            <option value="">Choose...</option>
+          </select>
+        </label>
+
+        <label class="sp-field">
+          <span class="sp-field__label">Password <span class="sp-req">*</span></span>
+          <input class="sp-input" name="accessPassword" type="password"
+                 autocomplete="current-password" required
+                 placeholder="Enter dashboard password" />
+        </label>
+
+        <p class="sp-error" data-access-error role="alert"></p>
+
+        <div class="sp-form__actions">
+          <button class="sp-btn sp-btn--primary sp-btn--block" type="submit">Continue</button>
+        </div>
+      </form>
+
+      <p class="sp-fineprint sp-fineprint--sm">
+        You can switch users from the dashboard once you are in.
+      </p>
+    </section>
+  </main>
+
+  <footer class="sp-footer">
+    <span class="sp-credit">
+      Built with <span class="sp-credit__heart" aria-hidden="true">&#10084;&#65039;</span>
+      <span class="sp-visually-hidden">love</span>
+      by
+      <a href="https://www.linkedin.com/in/in-sumit/" target="_blank" rel="noopener noreferrer"
+         class="sp-credit__link">Sumit</a>
+    </span>
+  </footer>
+
+  <script src="js/config.js?v=3"></script>
+  <script src="js/utils.js?v=3"></script>
+  <script src="js/dashboard-access.js?v=3"></script>
+</body>
+</html>

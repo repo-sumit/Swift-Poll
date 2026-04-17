@@ -89,6 +89,30 @@ alter table public.question_options add column if not exists is_active  boolean 
 alter table public.question_options add column if not exists deleted_at timestamptz;
 alter table public.question_options add column if not exists created_at timestamptz not null default now();
 
+-- User segmentation on submissions. Add nullable first, backfill,
+-- then enforce NOT NULL + CHECK. Safe to re-run.
+alter table public.submissions add column if not exists assigned_user text;
+update public.submissions set assigned_user = 'user_1' where assigned_user is null;
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name   = 'submissions'
+      and column_name  = 'assigned_user'
+      and is_nullable  = 'YES'
+  ) then
+    alter table public.submissions alter column assigned_user set not null;
+  end if;
+
+  if not exists (select 1 from pg_constraint where conname = 'submissions_assigned_user_chk') then
+    alter table public.submissions
+      add constraint submissions_assigned_user_chk
+      check (assigned_user in ('user_1','user_2','user_3','user_4','user_5','user_6'));
+  end if;
+end $$;
+
 -- -------------------------------------------------------------
 -- 3. INDEXES (safe now that columns exist)
 -- -------------------------------------------------------------
@@ -107,6 +131,7 @@ create unique index if not exists question_options_unique_value
 create index if not exists submissions_poll_id_idx           on public.submissions (poll_id);
 create index if not exists submissions_user_id_idx           on public.submissions (user_id);
 create index if not exists submissions_submitted_at_idx      on public.submissions (submitted_at desc);
+create index if not exists submissions_assigned_user_idx     on public.submissions (assigned_user);
 
 create index if not exists answers_submission_id_idx         on public.answers (submission_id);
 create index if not exists answers_question_id_idx           on public.answers (question_id);

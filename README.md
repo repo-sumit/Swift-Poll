@@ -107,6 +107,29 @@ Option B - GitHub:
 
 ---
 
+## 6b. User segmentation
+
+Swift Poll ships with a built-in "pick which user you are" dimension so you can split one poll across six audiences without needing proper auth.
+
+- The poll start screen has a required **Select user** dropdown (User 1 through User 6).
+- Every submission is tagged with that value in `submissions.assigned_user`.
+- The dashboard has a top **View responses for** dropdown that filters totals, aggregates, user-wise rows, and CSV export to just that user (or "All Users").
+
+### Dashboard access flow
+
+1. Click **Dashboard** anywhere -> redirected to `/dashboard-access.html`.
+2. Pick a user ("All Users" is allowed) and enter the dashboard password (`DASHBOARD_PASSCODE` in `js/config.js`).
+3. On success, the chosen user is stored in `sessionStorage.dashboardUser` and you land on the dashboard filtered to that scope.
+4. The top filter can switch scopes at any time. **Log out** clears the session and bounces back to the access page.
+
+Session notes:
+
+- Closing the tab clears the session.
+- Reloading the dashboard keeps it.
+- Visiting `/dashboard.html` without a session redirects to the access page automatically.
+
+Backward compat: the migration backfills any existing `submissions` that pre-date the column to `user_1` so the `NOT NULL` + `CHECK` constraint applies cleanly.
+
 ## 7. How dashboard works
 
 - **Aggregated counts**: one query fetches all `answers` for the active poll, then counts are tallied client-side. Questions and options come from a cached poll graph so empty options still render with 0.

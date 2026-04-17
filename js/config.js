@@ -26,5 +26,16 @@ window.SWIFT_POLL_CONFIG = {
   POLL_INTRO: "Answer a few quick questions. Takes less than a minute.",
 
   // Dashboard access - empty to make dashboard public
-  DASHBOARD_PASSCODE: "1234"
+  DASHBOARD_PASSCODE: "1234",
+
+  // User segmentation - poll tags each submission with one of these
+  // values; the dashboard filter uses the same list plus "all".
+  ASSIGNED_USERS: [
+    { value: "user_1", label: "User 1" },
+    { value: "user_2", label: "User 2" },
+    { value: "user_3", label: "User 3" },
+    { value: "user_4", label: "User 4" },
+    { value: "user_5", label: "User 5" },
+    { value: "user_6", label: "User 6" }
+  ]
 };

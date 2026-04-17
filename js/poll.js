@@ -13,9 +13,10 @@
  *   Empty     - when no active questions exist yet
  */
 (function () {
+  const CFG = window.SWIFT_POLL_CONFIG || {};
   const state = {
     questions: [],       // [{ id, text, order, options: [...] }]
-    user: null,          // { id, fullName }
+    user: null,          // { id, fullName, assignedUser }
     answers: {},         // { [questionId]: { optionId, optionText } }
     currentIndex: 0,
     submitting: false,
@@ -35,6 +36,7 @@
 
       identityForm:  document.querySelector("[data-identity-form]"),
       fullName:      document.querySelector("[name='fullName']"),
+      assignedUser:  document.querySelector("[data-assigned-user-select]"),
       identityError: document.querySelector("[data-identity-error]"),
 
       progressBar:   document.querySelector("[data-progress-bar]"),
@@ -46,6 +48,8 @@
       nextBtn:       document.querySelector("[data-nav-next]"),
       submitError:   document.querySelector("[data-submit-error]")
     };
+
+    populateAssignedUserOptions();
 
     try {
       state.questions = await SP.db.getActiveQuestions();
@@ -65,8 +69,15 @@
     wireIdentity();
     wireNavigation();
 
-    if (state.user) showQuestion();
-    else showIdentity();
+    // Require an assignedUser in the saved state too; older saved
+    // users (pre-segmentation) get bounced back to the identity
+    // screen so they can pick a user.
+    if (state.user && state.user.assignedUser) {
+      showQuestion();
+    } else {
+      state.user = null;
+      showIdentity();
+    }
   });
 
   // -------------------------------------------------------
@@ -123,15 +134,32 @@
   // -------------------------------------------------------
   // Identity
   // -------------------------------------------------------
+  function populateAssignedUserOptions() {
+    if (!el.assignedUser) return;
+    const users = Array.isArray(CFG.ASSIGNED_USERS) ? CFG.ASSIGNED_USERS : [];
+    // Keep the "Choose..." placeholder and append the six options
+    const opts = users.map((u) =>
+      `<option value="${SP.utils.escapeHtml(u.value)}">${SP.utils.escapeHtml(u.label)}</option>`
+    ).join("");
+    el.assignedUser.insertAdjacentHTML("beforeend", opts);
+  }
+
   function wireIdentity() {
     if (!el.identityForm) return;
     el.identityForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       el.identityError.textContent = "";
-      const fullName = (el.fullName.value || "").trim();
+      const fullName     = (el.fullName.value || "").trim();
+      const assignedUser = (el.assignedUser && el.assignedUser.value) || "";
+
       if (!fullName) {
         el.identityError.textContent = "Please enter your full name.";
         el.fullName.focus();
+        return;
+      }
+      if (!assignedUser) {
+        el.identityError.textContent = "Please select a user before continuing.";
+        el.assignedUser && el.assignedUser.focus();
         return;
       }
 
@@ -141,7 +169,7 @@
       try {
         const sessionId = SP.utils.getSessionId();
         const user = await SP.db.createUser({ fullName, sessionId });
-        state.user = { id: user.id, fullName: user.full_name };
+        state.user = { id: user.id, fullName: user.full_name, assignedUser };
         SP.utils.saveUser(state.user);
         submitBtn.disabled = false;
         submitBtn.textContent = "Start Poll";
@@ -241,7 +269,11 @@
         const a = state.answers[q.id];
         return { questionId: q.id, optionId: a.optionId, optionText: a.optionText };
       });
-      await SP.db.submitPoll({ userId: state.user.id, answers: payload });
+      await SP.db.submitPoll({
+        userId: state.user.id,
+        assignedUser: state.user.assignedUser,
+        answers: payload
+      });
 
       state.submitted = true;
       SP.utils.clearDraft();
