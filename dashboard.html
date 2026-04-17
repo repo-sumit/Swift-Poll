@@ -152,14 +152,10 @@
             <input class="sp-input" name="userPassword" type="password" required minlength="4" maxlength="120"
                    placeholder="min 4 chars" />
           </div>
-          <div class="sp-field">
-            <label class="sp-field__label">Role</label>
-            <select class="sp-input sp-select" name="userRole">
-              <option value="user">Normal user</option>
-              <option value="admin">Admin</option>
-            </select>
-          </div>
         </div>
+        <p class="sp-fineprint sp-fineprint--sm">
+          New accounts are created as normal users. Admin accounts can only be provisioned from SQL.
+        </p>
         <p class="sp-error" data-add-user-error role="alert"></p>
         <div class="sp-form__actions sp-admin__form-actions">
           <button type="submit" class="sp-btn sp-btn--primary">Add User</button>

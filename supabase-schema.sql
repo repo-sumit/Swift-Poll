@@ -412,7 +412,9 @@ set search_path = public, extensions
 as $$
 declare v_id uuid;
 begin
-  if p_role not in ('admin','user') then raise exception 'invalid role'; end if;
+  -- Admins can only be provisioned directly in SQL. Dashboard UI
+  -- must never create another admin.
+  if p_role <> 'user' then raise exception 'only normal users can be created from the dashboard'; end if;
   if char_length(coalesce(p_display_name,'')) = 0 then raise exception 'display_name required'; end if;
   if char_length(coalesce(p_password,'')) < 4 then raise exception 'password too short'; end if;
   if exists (select 1 from public.dashboard_users

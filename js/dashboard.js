@@ -329,12 +329,11 @@
         const fd = new FormData(el.addUserForm);
         const displayName = String(fd.get("userName") || "").trim();
         const password    = String(fd.get("userPassword") || "");
-        const role        = String(fd.get("userRole") || "user");
 
         const submitBtn = el.addUserForm.querySelector("button[type='submit']");
         submitBtn.disabled = true;
         try {
-          await SP.db.createDashboardUser({ displayName, password, role });
+          await SP.db.createDashboardUser({ displayName, password, role: "user" });
           el.addUserForm.reset();
           SP.utils.toast("User created.", "ok");
           dashboardUsers = await SP.db.listDashboardUsers();
