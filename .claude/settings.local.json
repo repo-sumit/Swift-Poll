@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/sumit/.claude/projects/c--Users-sumit-Downloads-Swift-Poll/memory/**)"
+    ]
+  }
+}

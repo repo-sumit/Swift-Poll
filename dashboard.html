@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#2563eb" />
+  <title>Swift Poll - Dashboard</title>
+  <link rel="icon" href="https://i.ibb.co/LDdkBqsS/image-4.png" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body class="sp-body sp-body--dashboard">
+  <header class="sp-header">
+    <a href="index.html" class="sp-header__brand" aria-label="Swift Poll home">
+      <img data-brand-logo alt="Swift Poll" class="sp-header__logo" />
+      <span class="sp-header__name" data-brand-name>Swift Poll</span>
+    </a>
+    <nav class="sp-header__nav" aria-label="Primary">
+      <a href="poll.html" class="sp-link" data-go-poll>Take Poll</a>
+    </nav>
+  </header>
+
+  <main class="sp-main sp-main--dashboard">
+    <section class="sp-dash-hero">
+      <div>
+        <h1 class="sp-dash-hero__title">Dashboard</h1>
+        <p class="sp-dash-hero__sub">Live aggregated results and individual responses.</p>
+      </div>
+      <div class="sp-dash-hero__actions">
+        <button class="sp-btn sp-btn--ghost sp-btn--sm" type="button" data-refresh>
+          <span aria-hidden="true">&#x21bb;</span> Refresh
+        </button>
+        <button class="sp-btn sp-btn--primary sp-btn--sm" type="button" data-export-csv>
+          Export CSV
+        </button>
+      </div>
+    </section>
+
+    <section class="sp-stats" aria-label="Summary">
+      <div class="sp-stat-card">
+        <span class="sp-stat-card__label">Total submissions</span>
+        <span class="sp-stat-card__value" data-total-submissions>-</span>
+      </div>
+    </section>
+
+    <p class="sp-error" data-error role="alert"></p>
+
+    <div class="sp-loading" data-loading>Loading dashboard...</div>
+
+    <section class="sp-empty is-hidden" data-empty-state>
+      <h2>No responses yet</h2>
+      <p>Once users submit the poll, their results will show up here in real time.</p>
+      <a class="sp-btn sp-btn--primary" href="poll.html">Take the Poll</a>
+    </section>
+
+    <section class="sp-section" aria-labelledby="agg-title">
+      <h2 id="agg-title" class="sp-section__title">Aggregated results</h2>
+      <div class="sp-agg-grid" data-aggregates></div>
+    </section>
+
+    <section class="sp-section" aria-labelledby="users-title">
+      <h2 id="users-title" class="sp-section__title">User-wise responses</h2>
+      <div data-user-responses></div>
+    </section>
+
+  </main>
+
+  <footer class="sp-footer">
+    <span>&copy; <span data-year></span> <span data-brand-name>Swift Poll</span></span>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="js/config.js"></script>
+  <script src="js/utils.js"></script>
+  <script src="js/supabase.js"></script>
+  <script src="js/dashboard.js"></script>
+  <script>document.querySelector("[data-year]").textContent = new Date().getFullYear();</script>
+</body>
+</html>

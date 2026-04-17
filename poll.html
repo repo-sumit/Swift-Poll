@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#2563eb" />
+  <title>Swift Poll - Take the poll</title>
+  <link rel="icon" href="https://i.ibb.co/LDdkBqsS/image-4.png" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body class="sp-body sp-body--poll">
+  <header class="sp-header">
+    <a href="index.html" class="sp-header__brand" aria-label="Swift Poll home">
+      <img data-brand-logo alt="Swift Poll" class="sp-header__logo" />
+      <span class="sp-header__name" data-brand-name>Swift Poll</span>
+    </a>
+    <nav class="sp-header__nav" aria-label="Primary">
+      <a href="dashboard.html" class="sp-link">Dashboard</a>
+    </nav>
+  </header>
+
+  <main class="sp-main sp-main--poll">
+
+    <!-- Screen 1: Identity -->
+    <section class="sp-card sp-card--poll" data-screen="identity" aria-labelledby="id-title">
+      <h1 id="id-title" class="sp-card__title">Before we start</h1>
+      <p class="sp-card__subtitle">We use this to show your answers on the dashboard. Takes a second.</p>
+
+      <form class="sp-form" data-identity-form novalidate>
+        <label class="sp-field">
+          <span class="sp-field__label">Full name <span class="sp-req">*</span></span>
+          <input class="sp-input" name="fullName" type="text" autocomplete="name"
+                 placeholder="e.g. Ananya Sharma" required maxlength="120" />
+        </label>
+
+        <label class="sp-field">
+          <span class="sp-field__label">Mobile or email <span class="sp-opt">(optional)</span></span>
+          <input class="sp-input" name="contact" type="text" autocomplete="email"
+                 placeholder="+91 98xxxxxx or name@email.com" maxlength="160" />
+        </label>
+
+        <p class="sp-error" data-identity-error role="alert"></p>
+
+        <div class="sp-form__actions">
+          <button class="sp-btn sp-btn--primary sp-btn--block" type="submit">Start Poll</button>
+        </div>
+      </form>
+
+      <p class="sp-fineprint sp-fineprint--sm">
+        No account needed. We store your name and answers to summarise on the dashboard.
+      </p>
+    </section>
+
+    <!-- Screen 2: Question -->
+    <section class="sp-card sp-card--poll is-hidden" data-screen="question" aria-labelledby="q-title">
+      <div class="sp-progress" aria-label="Poll progress">
+        <div class="sp-progress__meta">
+          <span class="sp-progress__label" data-progress-label>Question 1 of 6</span>
+        </div>
+        <div class="sp-progress__track" role="progressbar"
+             aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div class="sp-progress__bar" data-progress-bar style="width:0%"></div>
+        </div>
+      </div>
+
+      <h1 id="q-title" class="sp-q-title" data-question-text>Loading question...</h1>
+
+      <fieldset class="sp-options">
+        <legend class="sp-visually-hidden">Choose one</legend>
+        <div class="sp-options__list" data-question-options></div>
+      </fieldset>
+
+      <p class="sp-error" data-submit-error role="alert"></p>
+
+      <div class="sp-nav">
+        <button class="sp-btn sp-btn--ghost" type="button" data-nav-back>Back</button>
+        <button class="sp-btn sp-btn--primary" type="button" data-nav-next disabled>Next</button>
+      </div>
+    </section>
+
+    <!-- Screen 3: Success -->
+    <section class="sp-card sp-card--poll sp-card--success is-hidden" data-screen="success" aria-labelledby="done-title">
+      <div class="sp-check" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor"
+             stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+      </div>
+      <h1 id="done-title" class="sp-card__title">Thank you!</h1>
+      <p class="sp-card__subtitle">Your responses have been saved. You can now view how everyone else voted.</p>
+
+      <div class="sp-cta-row">
+        <a class="sp-btn sp-btn--primary" href="dashboard.html" data-go-dashboard>View Dashboard</a>
+        <a class="sp-btn sp-btn--ghost" href="index.html" data-go-home>Back to Home</a>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="sp-footer">
+    <span>&copy; <span data-year></span> <span data-brand-name>Swift Poll</span></span>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="js/config.js"></script>
+  <script src="js/utils.js"></script>
+  <script src="js/supabase.js"></script>
+  <script src="js/poll.js"></script>
+  <script>document.querySelector("[data-year]").textContent = new Date().getFullYear();</script>
+</body>
+</html>
