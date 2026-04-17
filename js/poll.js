@@ -1,37 +1,37 @@
 /**
  * Swift Poll - poll flow controller.
  *
- * Screens:
- *   1. Identity  - collect full name + optional contact
- *   2. Question  - one per screen, driven from config.js
- *   3. Success   - after Supabase write succeeds
+ * Questions are fetched live from Supabase, not from config.
+ * Each question carries its own option set (DB uuid + text). The
+ * user's answer is keyed by question id and points at the chosen
+ * option id, which is what we ship at submit time.
  *
- * Answers live in memory (and in localStorage as a draft) until
- * the final submit, which performs the Supabase writes in one go.
+ * Screens:
+ *   1. Identity - name only
+ *   2. Question - one per screen, DB-driven
+ *   3. Success  - after Supabase write succeeds
+ *   Empty     - when no active questions exist yet
  */
 (function () {
-  const CFG = window.SWIFT_POLL_CONFIG || {};
-  const QUESTIONS = [...(CFG.QUESTIONS || [])].sort((a, b) => a.order - b.order);
-  const OPTIONS = CFG.OPTIONS || [];
-
   const state = {
-    user: null,           // { id, fullName, contact }
-    answers: {},          // { [question.id]: option.value }
-    currentIndex: 0,      // index into QUESTIONS
+    questions: [],       // [{ id, text, order, options: [...] }]
+    user: null,          // { id, fullName }
+    answers: {},         // { [questionId]: { optionId, optionText } }
+    currentIndex: 0,
     submitting: false,
     submitted: false
   };
 
-  // -------- DOM refs (resolved after DOMContentLoaded)
   let el = {};
 
-  document.addEventListener("DOMContentLoaded", () => {
+  document.addEventListener("DOMContentLoaded", async () => {
     SP.utils.setHeaderBrand();
 
     el = {
       identity:      document.querySelector("[data-screen='identity']"),
       question:      document.querySelector("[data-screen='question']"),
       success:       document.querySelector("[data-screen='success']"),
+      empty:         document.querySelector("[data-screen='empty']"),
 
       identityForm:  document.querySelector("[data-identity-form]"),
       fullName:      document.querySelector("[name='fullName']"),
@@ -44,11 +44,22 @@
 
       backBtn:       document.querySelector("[data-nav-back]"),
       nextBtn:       document.querySelector("[data-nav-next]"),
-      submitError:   document.querySelector("[data-submit-error]"),
-
-      goDashboard:   document.querySelector("[data-go-dashboard]"),
-      goHome:        document.querySelector("[data-go-home]")
+      submitError:   document.querySelector("[data-submit-error]")
     };
+
+    try {
+      state.questions = await SP.db.getActiveQuestions();
+    } catch (err) {
+      console.error(err);
+      el.identityError && (el.identityError.textContent = friendlyError(err, "Could not load the poll."));
+      showIdentity();
+      return;
+    }
+
+    if (!state.questions.length) {
+      showEmpty();
+      return;
+    }
 
     restoreDraft();
     wireIdentity();
@@ -59,10 +70,40 @@
   });
 
   // -------------------------------------------------------
-  // Draft persistence - survives accidental refresh
+  // Screen switching
   // -------------------------------------------------------
+  function hideAll() {
+    [el.identity, el.question, el.success, el.empty].forEach((n) => n && n.classList.add("is-hidden"));
+  }
+  function showIdentity() {
+    hideAll();
+    el.identity.classList.remove("is-hidden");
+    setTimeout(() => el.fullName && el.fullName.focus(), 50);
+  }
+  function showQuestion() {
+    hideAll();
+    el.question.classList.remove("is-hidden");
+    renderQuestion();
+  }
+  function showSuccess() {
+    hideAll();
+    el.success.classList.remove("is-hidden");
+  }
+  function showEmpty() {
+    hideAll();
+    if (el.empty) el.empty.classList.remove("is-hidden");
+  }
+
+  // -------------------------------------------------------
+  // Draft persistence - per-poll-version so stale drafts get
+  // discarded if the admin changes the question set.
+  // -------------------------------------------------------
+  function draftKey() {
+    return "q:" + state.questions.map((q) => q.id).join("|");
+  }
   function saveDraft() {
     SP.utils.saveDraft({
+      key: draftKey(),
       answers: state.answers,
       currentIndex: state.currentIndex
     });
@@ -71,22 +112,17 @@
     const draft = SP.utils.loadDraft();
     const user  = SP.utils.loadUser();
     if (user && user.id) state.user = user;
-    if (draft && draft.answers) {
+    if (draft && draft.key === draftKey() && draft.answers) {
       state.answers = draft.answers;
-      state.currentIndex = Math.min(draft.currentIndex || 0, QUESTIONS.length - 1);
+      state.currentIndex = Math.min(draft.currentIndex || 0, state.questions.length - 1);
+    } else if (draft) {
+      SP.utils.clearDraft();
     }
   }
 
   // -------------------------------------------------------
-  // Screen: identity
+  // Identity
   // -------------------------------------------------------
-  function showIdentity() {
-    el.identity.classList.remove("is-hidden");
-    el.question.classList.add("is-hidden");
-    el.success.classList.add("is-hidden");
-    setTimeout(() => el.fullName && el.fullName.focus(), 50);
-  }
-
   function wireIdentity() {
     if (!el.identityForm) return;
     el.identityForm.addEventListener("submit", async (e) => {
@@ -105,10 +141,7 @@
       try {
         const sessionId = SP.utils.getSessionId();
         const user = await SP.db.createUser({ fullName, sessionId });
-        state.user = {
-          id: user.id,
-          fullName: user.full_name
-        };
+        state.user = { id: user.id, fullName: user.full_name };
         SP.utils.saveUser(state.user);
         submitBtn.disabled = false;
         submitBtn.textContent = "Start Poll";
@@ -123,44 +156,37 @@
   }
 
   // -------------------------------------------------------
-  // Screen: question
+  // Question rendering
   // -------------------------------------------------------
-  function showQuestion() {
-    el.identity.classList.add("is-hidden");
-    el.question.classList.remove("is-hidden");
-    el.success.classList.add("is-hidden");
-    renderQuestion();
-  }
-
   function renderQuestion() {
     const idx = state.currentIndex;
-    const total = QUESTIONS.length;
-    const q = QUESTIONS[idx];
+    const total = state.questions.length;
+    const q = state.questions[idx];
     const isLast = idx === total - 1;
 
-    const pct = Math.round(((idx) / total) * 100);
+    const pct = Math.round((idx / total) * 100);
     el.progressBar.style.width = pct + "%";
     el.progressBar.setAttribute("aria-valuenow", String(pct));
     el.progressLabel.textContent = `Question ${idx + 1} of ${total}`;
 
     el.qText.textContent = q.text;
 
-    // Render options
     el.qOptions.innerHTML = "";
-    const selected = state.answers[q.id];
-    OPTIONS.forEach((opt, i) => {
-      const id = `opt-${q.id}-${opt.value}`;
+    const selected = state.answers[q.id]?.optionId;
+
+    q.options.forEach((opt) => {
+      const id = `opt-${q.id}-${opt.id}`;
       const wrap = document.createElement("label");
-      wrap.className = "sp-option" + (selected === opt.value ? " sp-option--selected" : "");
+      wrap.className = "sp-option" + (selected === opt.id ? " sp-option--selected" : "");
       wrap.setAttribute("for", id);
       wrap.innerHTML = `
-        <input type="radio" id="${id}" name="answer" value="${SP.utils.escapeHtml(opt.value)}"
-               ${selected === opt.value ? "checked" : ""} />
+        <input type="radio" id="${id}" name="answer" value="${SP.utils.escapeHtml(opt.id)}"
+               ${selected === opt.id ? "checked" : ""} />
         <span class="sp-option__radio" aria-hidden="true"></span>
         <span class="sp-option__text">${SP.utils.escapeHtml(opt.text)}</span>
       `;
-      wrap.querySelector("input").addEventListener("change", (e) => {
-        state.answers[q.id] = e.target.value;
+      wrap.querySelector("input").addEventListener("change", () => {
+        state.answers[q.id] = { optionId: opt.id, optionText: opt.text };
         saveDraft();
         document.querySelectorAll(".sp-option").forEach((n) => n.classList.remove("sp-option--selected"));
         wrap.classList.add("sp-option--selected");
@@ -169,7 +195,6 @@
       el.qOptions.appendChild(wrap);
     });
 
-    // Buttons
     el.backBtn.disabled = idx === 0;
     el.nextBtn.disabled = !state.answers[q.id] || state.submitting;
     el.nextBtn.textContent = isLast ? (state.submitting ? "Submitting..." : "Submit") : "Next";
@@ -186,10 +211,10 @@
     });
     el.nextBtn.addEventListener("click", async () => {
       const idx = state.currentIndex;
-      const q = QUESTIONS[idx];
+      const q = state.questions[idx];
       if (!state.answers[q.id]) return;
 
-      if (idx < QUESTIONS.length - 1) {
+      if (idx < state.questions.length - 1) {
         state.currentIndex += 1;
         saveDraft();
         renderQuestion();
@@ -201,7 +226,7 @@
   }
 
   // -------------------------------------------------------
-  // Final submit
+  // Submit
   // -------------------------------------------------------
   async function submitPoll() {
     if (state.submitting || state.submitted) return;
@@ -212,19 +237,15 @@
     el.submitError.textContent = "";
 
     try {
-      const payload = QUESTIONS.map((q) => ({
-        questionText: q.text,
-        optionValue:  state.answers[q.id]
-      }));
+      const payload = state.questions.map((q) => {
+        const a = state.answers[q.id];
+        return { questionId: q.id, optionId: a.optionId, optionText: a.optionText };
+      });
       await SP.db.submitPoll({ userId: state.user.id, answers: payload });
 
       state.submitted = true;
       SP.utils.clearDraft();
-
-      el.question.classList.add("is-hidden");
-      el.success.classList.remove("is-hidden");
-
-      // Full progress
+      showSuccess();
       el.progressBar.style.width = "100%";
       SP.utils.toast("Responses saved. Thank you!", "ok");
     } catch (err) {
@@ -233,22 +254,18 @@
       el.nextBtn.disabled = false;
       el.backBtn.disabled = false;
       el.nextBtn.textContent = "Submit";
-      el.submitError.textContent = friendlyError(err, "Could not submit right now. Please check your connection and try again.");
+      el.submitError.textContent = friendlyError(err, "Could not submit right now. Please try again.");
     }
   }
 
-  // -------------------------------------------------------
-  // Error helper
-  // -------------------------------------------------------
   function friendlyError(err, fallback) {
     const msg = (err && (err.message || err.error_description)) || "";
     if (/Supabase URL not configured|Supabase client library not loaded/i.test(msg))
       return "App is not configured yet. Add your Supabase keys in js/config.js.";
-    if (/row-level security|RLS/i.test(msg)) return "Database blocked the write (RLS). Re-run supabase-schema.sql to apply policies.";
-    if (/Invalid API key|JWT|401/i.test(msg)) return "Invalid Supabase anon key. Copy the anon public key from Project Settings -> API.";
-    if (/relation .* does not exist|schema cache/i.test(msg)) return "Database tables missing. Run supabase-schema.sql in the SQL editor.";
+    if (/row-level security|RLS/i.test(msg)) return "Database blocked the write (RLS). Re-run supabase-schema.sql.";
+    if (/Invalid API key|JWT|401/i.test(msg)) return "Invalid Supabase anon key.";
+    if (/relation .* does not exist|schema cache/i.test(msg)) return "Database tables missing. Run supabase-schema.sql.";
     if (/Failed to fetch|NetworkError/i.test(msg)) return "Network issue. Please try again in a moment.";
-    // Surface the raw message so we can see what is wrong in the wild
     return fallback + (msg ? " (" + msg + ")" : "");
   }
 })();

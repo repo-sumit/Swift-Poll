@@ -585,6 +585,145 @@ a:hover { text-decoration: underline; }
 }
 
 /* ============================================================
+   Admin: Manage Questions
+   ============================================================ */
+.sp-admin { margin-top: 28px; }
+.sp-admin__head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.sp-admin__sub { margin: 2px 0 0; color: var(--sp-text-muted); font-size: 13px; }
+
+.sp-admin__form { padding: 18px; margin-bottom: 20px; }
+.sp-admin__form-title {
+  margin: 0 0 14px; font-size: 16px; font-weight: 700;
+}
+
+.sp-input--area {
+  resize: vertical;
+  min-height: 58px;
+  line-height: 1.4;
+}
+
+.sp-counter {
+  font-size: 12px; font-weight: 500;
+  color: var(--sp-text-soft);
+  margin-left: auto;
+}
+.sp-field__label { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+.sp-field-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin-top: 12px;
+}
+@media (min-width: 600px) {
+  .sp-field-grid { grid-template-columns: 1fr 1fr; gap: 14px; }
+}
+
+.sp-admin__form-actions {
+  display: flex; gap: 10px; justify-content: flex-end;
+  margin-top: 14px; flex-wrap: wrap;
+}
+
+.sp-admin__list-head {
+  display: flex; align-items: center; gap: 10px;
+  margin: 10px 0 10px;
+}
+.sp-admin__list-title {
+  margin: 0; font-size: 15px; font-weight: 700;
+  color: var(--sp-text);
+}
+.sp-admin__count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 24px; height: 22px; padding: 0 8px;
+  border-radius: 999px;
+  background: var(--sp-bg-2); color: var(--sp-text-muted);
+  font-size: 12px; font-weight: 700;
+}
+.sp-admin__list { display: grid; gap: 10px; }
+.sp-admin__list-empty { margin: 12px 2px; font-size: 14px; }
+
+.sp-q-row {
+  background: #fff;
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-lg);
+  padding: 14px 16px;
+  box-shadow: var(--sp-shadow-sm);
+}
+.sp-q-row__head {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: start;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.sp-q-row__num {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 34px; height: 26px; padding: 0 8px;
+  border-radius: 999px;
+  background: var(--sp-grad); color: #fff;
+  font-weight: 700; font-size: 12px;
+}
+.sp-q-row__text {
+  margin: 0; font-size: 15px; line-height: 1.4; font-weight: 600;
+  color: var(--sp-text);
+}
+.sp-q-row__opts {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.sp-q-row__opt {
+  font-size: 13px; color: var(--sp-text-muted);
+  background: var(--sp-bg-2);
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+/* Danger button */
+.sp-btn--danger {
+  background: var(--sp-danger);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(220, 38, 38, 0.22);
+}
+.sp-btn--danger:hover:not(:disabled) { box-shadow: 0 8px 18px rgba(220, 38, 38, 0.28); }
+
+/* ============================================================
+   Modal
+   ============================================================ */
+.sp-modal {
+  position: fixed; inset: 0;
+  z-index: 100;
+  display: grid; place-items: center;
+  padding: 16px;
+  animation: sp-modal-in 0.18s ease;
+}
+.sp-modal__backdrop {
+  position: absolute; inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(2px);
+}
+.sp-modal__dialog {
+  position: relative;
+  background: #fff;
+  border-radius: var(--sp-radius-lg);
+  padding: 22px;
+  max-width: 440px; width: 100%;
+  box-shadow: var(--sp-shadow-lg);
+}
+.sp-modal__title { margin: 0 0 8px; font-size: 18px; font-weight: 700; }
+.sp-modal__body  { margin: 0 0 16px; color: var(--sp-text-muted); font-size: 14px; }
+.sp-modal__actions {
+  display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap;
+}
+@keyframes sp-modal-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ============================================================
    Reduced motion
    ============================================================ */
 @media (prefers-reduced-motion: reduce) {

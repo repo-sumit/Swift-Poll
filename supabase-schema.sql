@@ -1,12 +1,12 @@
 -- =============================================================
 -- Swift Poll - Supabase Schema
 -- =============================================================
--- Run this file in the Supabase SQL editor (SQL -> New query)
--- to provision all tables, indexes, constraints, and seed data.
--- Safe to re-run: uses IF NOT EXISTS and ON CONFLICT.
+-- Run this file in the Supabase SQL editor. It is idempotent -
+-- safe to re-run for new installs, upgrades, or schema drift.
+-- The bottom half contains migrations (ALTER + constraints +
+-- policies) that upgrade pre-existing projects in place.
 -- =============================================================
 
--- Extension for UUID generation
 create extension if not exists "pgcrypto";
 
 -- -------------------------------------------------------------
@@ -19,7 +19,6 @@ create table if not exists public.users (
   session_id     text,
   created_at     timestamptz not null default now()
 );
-
 create index if not exists users_created_at_idx on public.users (created_at desc);
 create index if not exists users_session_id_idx on public.users (session_id);
 
@@ -35,7 +34,8 @@ create table if not exists public.polls (
 );
 
 -- -------------------------------------------------------------
--- QUESTIONS
+-- QUESTIONS (fresh install shape - migration block below brings
+-- older installs to this shape in place)
 -- -------------------------------------------------------------
 create table if not exists public.questions (
   id            uuid primary key default gen_random_uuid(),
@@ -44,11 +44,13 @@ create table if not exists public.questions (
   question_type text not null default 'single_select',
   display_order int  not null default 0,
   is_active     boolean not null default true,
-  created_at    timestamptz not null default now()
+  deleted_at    timestamptz,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
 );
-
-create index if not exists questions_poll_id_idx on public.questions (poll_id);
-create index if not exists questions_order_idx   on public.questions (poll_id, display_order);
+create index if not exists questions_poll_id_idx   on public.questions (poll_id);
+create index if not exists questions_order_idx     on public.questions (poll_id, display_order);
+create index if not exists questions_is_active_idx on public.questions (poll_id, is_active, deleted_at);
 
 -- -------------------------------------------------------------
 -- QUESTION OPTIONS
@@ -58,10 +60,13 @@ create table if not exists public.question_options (
   question_id    uuid not null references public.questions(id) on delete cascade,
   option_text    text not null,
   option_value   text not null,
-  display_order  int  not null default 0
+  display_order  int  not null default 0,
+  is_active      boolean not null default true,
+  deleted_at     timestamptz,
+  created_at     timestamptz not null default now()
 );
-
 create index if not exists question_options_question_id_idx on public.question_options (question_id);
+create index if not exists question_options_is_active_idx   on public.question_options (question_id, is_active, deleted_at);
 create unique index if not exists question_options_unique_value
   on public.question_options (question_id, option_value);
 
@@ -75,10 +80,9 @@ create table if not exists public.submissions (
   submitted_at timestamptz not null default now(),
   status       text not null default 'submitted'
 );
-
-create index if not exists submissions_poll_id_idx on public.submissions (poll_id);
-create index if not exists submissions_user_id_idx on public.submissions (user_id);
-create index if not exists submissions_submitted_at_idx on public.submissions (submitted_at desc);
+create index if not exists submissions_poll_id_idx       on public.submissions (poll_id);
+create index if not exists submissions_user_id_idx       on public.submissions (user_id);
+create index if not exists submissions_submitted_at_idx  on public.submissions (submitted_at desc);
 
 -- -------------------------------------------------------------
 -- ANSWERS
@@ -92,24 +96,45 @@ create table if not exists public.answers (
   created_at           timestamptz not null default now(),
   unique (submission_id, question_id)
 );
-
 create index if not exists answers_submission_id_idx on public.answers (submission_id);
 create index if not exists answers_question_id_idx   on public.answers (question_id);
 create index if not exists answers_option_id_idx     on public.answers (selected_option_id);
 
 -- =============================================================
+-- MIGRATION BLOCK - brings older installs up to current shape.
+-- Safe to run on fresh installs (columns/constraints already
+-- exist; the IF NOT EXISTS clauses make this a no-op).
+-- =============================================================
+alter table public.questions        add column if not exists deleted_at timestamptz;
+alter table public.questions        add column if not exists updated_at timestamptz not null default now();
+alter table public.question_options add column if not exists is_active  boolean not null default true;
+alter table public.question_options add column if not exists deleted_at timestamptz;
+alter table public.question_options add column if not exists created_at timestamptz not null default now();
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'questions_text_length_chk') then
+    alter table public.questions
+      add constraint questions_text_length_chk check (char_length(question_text) between 1 and 150);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'questions_type_chk') then
+    alter table public.questions
+      add constraint questions_type_chk check (question_type in ('single_select'));
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'question_options_text_length_chk') then
+    alter table public.question_options
+      add constraint question_options_text_length_chk check (char_length(option_text) between 1 and 75);
+  end if;
+end $$;
+
+-- =============================================================
 -- ROW LEVEL SECURITY
 -- =============================================================
--- Public anon client needs to:
---   - insert users, submissions, answers
---   - read polls, questions, question_options (to render poll)
---   - read aggregates for dashboard (users, submissions, answers, questions, options)
---
--- For stricter production use, gate the dashboard behind an
--- admin passcode (see README "Security") or move aggregation
--- into a Postgres function with security definer.
+-- The dashboard is gated client-side by a passcode. Admin writes
+-- (insert/update on questions + question_options) are allowed
+-- for anon. For stricter production: move admin to Supabase
+-- Auth and scope these policies to an authenticated role.
 -- =============================================================
-
 alter table public.users            enable row level security;
 alter table public.polls            enable row level security;
 alter table public.questions        enable row level security;
@@ -132,7 +157,7 @@ create policy "read question_options" on public.question_options for select usin
 create policy "read submissions"      on public.submissions      for select using (true);
 create policy "read answers"          on public.answers          for select using (true);
 
--- Insert policies (anon can submit polls)
+-- Insert policies for poll submission flow
 drop policy if exists "insert users"       on public.users;
 drop policy if exists "insert submissions" on public.submissions;
 drop policy if exists "insert answers"     on public.answers;
@@ -141,8 +166,19 @@ create policy "insert users"       on public.users       for insert with check (
 create policy "insert submissions" on public.submissions for insert with check (true);
 create policy "insert answers"     on public.answers     for insert with check (true);
 
+-- Admin policies for question management (dashboard)
+drop policy if exists "admin insert questions"        on public.questions;
+drop policy if exists "admin update questions"        on public.questions;
+drop policy if exists "admin insert question_options" on public.question_options;
+drop policy if exists "admin update question_options" on public.question_options;
+
+create policy "admin insert questions"        on public.questions        for insert with check (true);
+create policy "admin update questions"        on public.questions        for update using (true) with check (true);
+create policy "admin insert question_options" on public.question_options for insert with check (true);
+create policy "admin update question_options" on public.question_options for update using (true) with check (true);
+
 -- =============================================================
--- SEED DATA - default poll + 6 questions, each with Yes/Not Sure/No
+-- SEED DATA - default poll + 6 seed questions with Yes/Not Sure/No
 -- =============================================================
 insert into public.polls (slug, title, description)
 values (
@@ -152,8 +188,6 @@ values (
 )
 on conflict (slug) do nothing;
 
--- Insert questions + options in a single PL/pgSQL block so ids
--- are wired together correctly.
 do $$
 declare
   v_poll_id uuid;
@@ -171,7 +205,6 @@ begin
   select id into v_poll_id from public.polls where slug = 'swift-poll-default';
 
   for v_idx in 1 .. array_length(v_texts, 1) loop
-    -- Skip if a question with the same text already exists for this poll
     select id into v_q_id
     from public.questions
     where poll_id = v_poll_id and question_text = v_texts[v_idx];
@@ -190,21 +223,24 @@ begin
 end $$;
 
 -- =============================================================
--- OPTIONAL: aggregate view for dashboard (convenience)
+-- Aggregated view (active only)
 -- =============================================================
 create or replace view public.v_question_option_counts as
 select
-  q.id          as question_id,
+  q.id            as question_id,
   q.question_text,
   q.display_order as question_order,
-  o.id          as option_id,
+  o.id            as option_id,
   o.option_text,
   o.option_value,
   o.display_order as option_order,
   count(a.id)::int as response_count
 from public.questions q
-join public.question_options o on o.question_id = q.id
+join public.question_options o
+  on o.question_id = q.id
+ and o.is_active = true
+ and o.deleted_at is null
 left join public.answers a on a.selected_option_id = o.id
-where q.is_active = true
+where q.is_active = true and q.deleted_at is null
 group by q.id, q.question_text, q.display_order, o.id, o.option_text, o.option_value, o.display_order
 order by q.display_order, o.display_order;

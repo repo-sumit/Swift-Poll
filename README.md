@@ -119,37 +119,47 @@ Loading, error, and empty states are all handled.
 
 ## 8. How to add more questions
 
-1. Open [`js/config.js`](js/config.js) and append a new object to `QUESTIONS`:
+Questions now live in Supabase and are managed entirely from the admin dashboard.
 
-   ```js
-   {
-     id: "q7",
-     order: 7,
-     type: "single_select",
-     text: "Your new question text"
-   }
-   ```
+### From the dashboard (recommended)
 
-2. In Supabase (SQL Editor), insert the question + options:
+1. Open [`/dashboard.html`](dashboard.html) and enter the passcode.
+2. In the **Manage questions** section, fill the form:
+   - Question text (up to 150 chars)
+   - Four options (up to 75 chars each, unique)
+3. Click **Add Question**. The question appears immediately in the poll form, aggregated results, and user-wise responses.
 
-   ```sql
-   with p as (select id from polls where slug = 'swift-poll-default'),
-        q as (
-          insert into questions (poll_id, question_text, question_type, display_order)
-          select id, 'Your new question text', 'single_select', 7 from p
-          returning id
-        )
-   insert into question_options (question_id, option_text, option_value, display_order)
-   select id, 'Yes',      'yes',      1 from q union all
-   select id, 'Not Sure', 'not_sure', 2 from q union all
-   select id, 'No',       'no',       3 from q;
-   ```
+### Deleting a question
 
-   Or re-edit the seed block at the bottom of `supabase-schema.sql` and rerun it.
+1. Click **Delete** on any row in **Active questions**.
+2. Confirm in the modal.
+3. The question is **soft-deleted** (`is_active = false`, `deleted_at = now()`) along with its options. Historical submissions are preserved in the database but hidden from every UI.
 
-3. Refresh the app. No HTML/CSS changes needed.
+### From SQL (power users)
 
-The option set (`OPTIONS`) is shared. If you want per-question options, extend the `QUESTIONS` entry with its own `options` array and update `poll.js` accordingly.
+You can still insert directly:
+
+```sql
+with p as (select id from polls where slug = 'swift-poll-default'),
+     q as (
+       insert into questions (poll_id, question_text, question_type, display_order)
+       select id, 'Your new question text', 'single_select',
+              coalesce((select max(display_order) from questions), 0) + 1 from p
+       returning id
+     )
+insert into question_options (question_id, option_text, option_value, display_order)
+select id, 'Yes',      'opt_1', 1 from q union all
+select id, 'Not Sure', 'opt_2', 2 from q union all
+select id, 'No',       'opt_3', 3 from q union all
+select id, 'Skip',     'opt_4', 4 from q;
+```
+
+### Deletion strategy (why soft delete)
+
+- `questions` and `question_options` carry `is_active` + `deleted_at`.
+- Every read in the app filters `is_active = true and deleted_at is null`.
+- Historical `answers` keep their FKs intact, so there is **zero risk of losing submission data** when an admin deletes a question.
+- If you want a hard purge later, truncate inactive rows directly in SQL after you are sure no analytics depend on them.
 
 ---
 

@@ -47,6 +47,83 @@
 
     <div class="sp-loading" data-loading>Loading dashboard...</div>
 
+    <!-- ================================================
+         Admin: Manage Questions
+         ================================================ -->
+    <section class="sp-section sp-admin" aria-labelledby="manage-title">
+      <div class="sp-admin__head">
+        <div>
+          <h2 id="manage-title" class="sp-section__title">Manage questions</h2>
+          <p class="sp-admin__sub">Add new questions or remove existing ones. Changes apply instantly.</p>
+        </div>
+      </div>
+
+      <form class="sp-card sp-admin__form" data-add-question-form novalidate>
+        <h3 class="sp-admin__form-title">Add a new question</h3>
+
+        <div class="sp-field">
+          <label for="admin-q-text" class="sp-field__label">
+            Question <span class="sp-req">*</span>
+            <span class="sp-counter" data-counter-for="questionText">0 / 150</span>
+          </label>
+          <textarea id="admin-q-text" name="questionText" class="sp-input sp-input--area"
+                    maxlength="150" rows="2"
+                    placeholder="e.g. Does your platform personalise learning paths?"
+                    required></textarea>
+        </div>
+
+        <div class="sp-field-grid">
+          <div class="sp-field">
+            <label for="admin-opt-1" class="sp-field__label">
+              Option 1 <span class="sp-req">*</span>
+              <span class="sp-counter" data-counter-for="option1">0 / 75</span>
+            </label>
+            <input id="admin-opt-1" name="option1" class="sp-input" maxlength="75"
+                   placeholder="e.g. Yes" required />
+          </div>
+          <div class="sp-field">
+            <label for="admin-opt-2" class="sp-field__label">
+              Option 2 <span class="sp-req">*</span>
+              <span class="sp-counter" data-counter-for="option2">0 / 75</span>
+            </label>
+            <input id="admin-opt-2" name="option2" class="sp-input" maxlength="75"
+                   placeholder="e.g. Not Sure" required />
+          </div>
+          <div class="sp-field">
+            <label for="admin-opt-3" class="sp-field__label">
+              Option 3 <span class="sp-req">*</span>
+              <span class="sp-counter" data-counter-for="option3">0 / 75</span>
+            </label>
+            <input id="admin-opt-3" name="option3" class="sp-input" maxlength="75"
+                   placeholder="e.g. No" required />
+          </div>
+          <div class="sp-field">
+            <label for="admin-opt-4" class="sp-field__label">
+              Option 4 <span class="sp-req">*</span>
+              <span class="sp-counter" data-counter-for="option4">0 / 75</span>
+            </label>
+            <input id="admin-opt-4" name="option4" class="sp-input" maxlength="75"
+                   placeholder="e.g. Not Applicable" required />
+          </div>
+        </div>
+
+        <p class="sp-error" data-add-question-error role="alert"></p>
+
+        <div class="sp-form__actions sp-admin__form-actions">
+          <button type="button" class="sp-btn sp-btn--ghost" data-add-question-reset>Reset</button>
+          <button type="submit" class="sp-btn sp-btn--primary" data-add-question-submit>Add Question</button>
+        </div>
+      </form>
+
+      <div class="sp-admin__list-head">
+        <h3 class="sp-admin__list-title">Active questions</h3>
+        <span class="sp-admin__count" data-questions-count>0</span>
+      </div>
+      <div class="sp-admin__list" data-questions-list>
+        <p class="sp-muted sp-admin__list-empty">No questions yet. Add your first above.</p>
+      </div>
+    </section>
+
     <section class="sp-empty is-hidden" data-empty-state>
       <h2>No responses yet</h2>
       <p>Once users submit the poll, their results will show up here in real time.</p>
@@ -64,6 +141,21 @@
     </section>
 
   </main>
+
+  <!-- Delete confirmation modal -->
+  <div class="sp-modal is-hidden" data-modal role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="sp-modal__backdrop" data-modal-cancel></div>
+    <div class="sp-modal__dialog" role="document">
+      <h3 id="modal-title" class="sp-modal__title">Delete this question?</h3>
+      <p class="sp-modal__body" data-modal-body>
+        Deleting this question will remove it from the live poll and dashboard. Continue?
+      </p>
+      <div class="sp-modal__actions">
+        <button type="button" class="sp-btn sp-btn--ghost" data-modal-cancel>Cancel</button>
+        <button type="button" class="sp-btn sp-btn--danger" data-modal-confirm>Delete</button>
+      </div>
+    </div>
+  </div>
 
   <footer class="sp-footer">
     <span>&copy; <span data-year></span> <span data-brand-name>Swift Poll</span></span>
