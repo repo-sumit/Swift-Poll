@@ -539,6 +539,31 @@ a:hover { text-decoration: underline; }
   text-align: center;
 }
 .sp-footer__dot { margin: 0 6px; }
+.sp-credit { white-space: nowrap; }
+.sp-credit__heart {
+  display: inline-block;
+  color: #ef4444;
+  transform: translateY(1px);
+  animation: sp-heartbeat 1.8s ease-in-out infinite;
+}
+.sp-credit__link {
+  color: var(--sp-text-muted);
+  font-weight: 600;
+  border-bottom: 1px dashed var(--sp-border-2);
+  padding-bottom: 1px;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.sp-credit__link:hover {
+  color: var(--sp-blue-600);
+  border-bottom-color: var(--sp-blue);
+  text-decoration: none;
+}
+@keyframes sp-heartbeat {
+  0%, 100% { transform: translateY(1px) scale(1); }
+  15%      { transform: translateY(1px) scale(1.18); }
+  30%      { transform: translateY(1px) scale(1); }
+  45%      { transform: translateY(1px) scale(1.12); }
+}
 
 /* --------------------------- Toasts --------------------------- */
 .sp-toast {
