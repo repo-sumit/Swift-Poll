@@ -67,11 +67,11 @@ SP.db = (function () {
     return { poll, index };
   }
 
-  async function createUser({ fullName, contact, sessionId }) {
+  async function createUser({ fullName, sessionId }) {
     const supa = init();
     const payload = {
       full_name: fullName,
-      contact_value: contact || null,
+      contact_value: null,
       session_id: sessionId || null
     };
     const { data, error } = await supa

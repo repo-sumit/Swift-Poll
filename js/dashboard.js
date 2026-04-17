@@ -144,7 +144,6 @@
       <thead>
         <tr>
           <th>User</th>
-          <th>Contact</th>
           <th>Submitted</th>
           ${orderedQuestions.map((q, i) => `<th title="${SP.utils.escapeHtml(q)}">Q${i + 1}</th>`).join("")}
         </tr>
@@ -153,12 +152,10 @@
       const answerByQ = {};
       (s.answers || []).forEach((a) => { answerByQ[a.question?.question_text] = a.selected_option_text; });
       const name    = s.user?.full_name || "Anonymous";
-      const contact = s.user?.contact_value || s.user?.session_id || "-";
       const when    = SP.utils.formatDate(s.submitted_at);
       const cells   = orderedQuestions.map((q) => `<td>${SP.utils.escapeHtml(answerByQ[q] || "-")}</td>`).join("");
       return `<tr>
         <td>${SP.utils.escapeHtml(name)}</td>
-        <td class="sp-muted">${SP.utils.escapeHtml(contact)}</td>
         <td class="sp-muted">${SP.utils.escapeHtml(when)}</td>
         ${cells}
       </tr>`;
@@ -178,13 +175,11 @@
           <span class="sp-user-card__a">${SP.utils.escapeHtml(answerByQ[q] || "-")}</span>
         </li>`).join("");
       const name = s.user?.full_name || "Anonymous";
-      const contact = s.user?.contact_value || s.user?.session_id || "-";
       return `
         <article class="sp-user-card">
           <header class="sp-user-card__head">
             <div>
               <h4 class="sp-user-card__name">${SP.utils.escapeHtml(name)}</h4>
-              <p class="sp-user-card__meta">${SP.utils.escapeHtml(contact)}</p>
             </div>
             <time class="sp-user-card__time">${SP.utils.escapeHtml(SP.utils.formatDate(s.submitted_at))}</time>
           </header>
@@ -222,14 +217,13 @@
       return;
     }
     const questions = deriveQuestionOrder(lastUserRows);
-    const header = ["Name", "Contact", "Submitted At", ...questions.map((_, i) => "Q" + (i + 1))];
+    const header = ["Name", "Submitted At", ...questions.map((_, i) => "Q" + (i + 1))];
     const lines = [header.map(csvEscape).join(",")];
     for (const s of lastUserRows) {
       const byQ = {};
       (s.answers || []).forEach((a) => { byQ[a.question?.question_text] = a.selected_option_text; });
       const row = [
         s.user?.full_name || "Anonymous",
-        s.user?.contact_value || s.user?.session_id || "",
         SP.utils.formatDate(s.submitted_at),
         ...questions.map((q) => byQ[q] || "")
       ];

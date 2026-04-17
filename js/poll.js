@@ -35,7 +35,6 @@
 
       identityForm:  document.querySelector("[data-identity-form]"),
       fullName:      document.querySelector("[name='fullName']"),
-      contact:       document.querySelector("[name='contact']"),
       identityError: document.querySelector("[data-identity-error]"),
 
       progressBar:   document.querySelector("[data-progress-bar]"),
@@ -94,7 +93,6 @@
       e.preventDefault();
       el.identityError.textContent = "";
       const fullName = (el.fullName.value || "").trim();
-      const contact  = (el.contact.value || "").trim();
       if (!fullName) {
         el.identityError.textContent = "Please enter your full name.";
         el.fullName.focus();
@@ -106,11 +104,10 @@
       submitBtn.textContent = "Starting...";
       try {
         const sessionId = SP.utils.getSessionId();
-        const user = await SP.db.createUser({ fullName, contact, sessionId });
+        const user = await SP.db.createUser({ fullName, sessionId });
         state.user = {
           id: user.id,
-          fullName: user.full_name,
-          contact: user.contact_value
+          fullName: user.full_name
         };
         SP.utils.saveUser(state.user);
         submitBtn.disabled = false;
