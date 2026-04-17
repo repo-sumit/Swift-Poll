@@ -3,14 +3,22 @@
 -- =============================================================
 -- Run this file in the Supabase SQL editor. It is idempotent -
 -- safe to re-run for new installs, upgrades, or schema drift.
--- The bottom half contains migrations (ALTER + constraints +
--- policies) that upgrade pre-existing projects in place.
+--
+-- Ordering:
+--   1. Create tables (IF NOT EXISTS, so existing tables stay)
+--   2. Migrations: ALTER IF NOT EXISTS to bring pre-existing
+--      tables up to current column set
+--   3. Indexes (now safe to reference new columns)
+--   4. Constraints (CHECK)
+--   5. RLS policies
+--   6. Seed data
+--   7. View
 -- =============================================================
 
 create extension if not exists "pgcrypto";
 
 -- -------------------------------------------------------------
--- USERS
+-- 1. TABLES (fresh-install shape)
 -- -------------------------------------------------------------
 create table if not exists public.users (
   id             uuid primary key default gen_random_uuid(),
@@ -19,12 +27,7 @@ create table if not exists public.users (
   session_id     text,
   created_at     timestamptz not null default now()
 );
-create index if not exists users_created_at_idx on public.users (created_at desc);
-create index if not exists users_session_id_idx on public.users (session_id);
 
--- -------------------------------------------------------------
--- POLLS
--- -------------------------------------------------------------
 create table if not exists public.polls (
   id          uuid primary key default gen_random_uuid(),
   slug        text unique not null,
@@ -33,10 +36,6 @@ create table if not exists public.polls (
   created_at  timestamptz not null default now()
 );
 
--- -------------------------------------------------------------
--- QUESTIONS (fresh install shape - migration block below brings
--- older installs to this shape in place)
--- -------------------------------------------------------------
 create table if not exists public.questions (
   id            uuid primary key default gen_random_uuid(),
   poll_id       uuid not null references public.polls(id) on delete cascade,
@@ -48,13 +47,7 @@ create table if not exists public.questions (
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
 );
-create index if not exists questions_poll_id_idx   on public.questions (poll_id);
-create index if not exists questions_order_idx     on public.questions (poll_id, display_order);
-create index if not exists questions_is_active_idx on public.questions (poll_id, is_active, deleted_at);
 
--- -------------------------------------------------------------
--- QUESTION OPTIONS
--- -------------------------------------------------------------
 create table if not exists public.question_options (
   id             uuid primary key default gen_random_uuid(),
   question_id    uuid not null references public.questions(id) on delete cascade,
@@ -65,14 +58,7 @@ create table if not exists public.question_options (
   deleted_at     timestamptz,
   created_at     timestamptz not null default now()
 );
-create index if not exists question_options_question_id_idx on public.question_options (question_id);
-create index if not exists question_options_is_active_idx   on public.question_options (question_id, is_active, deleted_at);
-create unique index if not exists question_options_unique_value
-  on public.question_options (question_id, option_value);
 
--- -------------------------------------------------------------
--- SUBMISSIONS
--- -------------------------------------------------------------
 create table if not exists public.submissions (
   id           uuid primary key default gen_random_uuid(),
   poll_id      uuid not null references public.polls(id) on delete cascade,
@@ -80,13 +66,7 @@ create table if not exists public.submissions (
   submitted_at timestamptz not null default now(),
   status       text not null default 'submitted'
 );
-create index if not exists submissions_poll_id_idx       on public.submissions (poll_id);
-create index if not exists submissions_user_id_idx       on public.submissions (user_id);
-create index if not exists submissions_submitted_at_idx  on public.submissions (submitted_at desc);
 
--- -------------------------------------------------------------
--- ANSWERS
--- -------------------------------------------------------------
 create table if not exists public.answers (
   id                   uuid primary key default gen_random_uuid(),
   submission_id        uuid not null references public.submissions(id) on delete cascade,
@@ -96,21 +76,45 @@ create table if not exists public.answers (
   created_at           timestamptz not null default now(),
   unique (submission_id, question_id)
 );
-create index if not exists answers_submission_id_idx on public.answers (submission_id);
-create index if not exists answers_question_id_idx   on public.answers (question_id);
-create index if not exists answers_option_id_idx     on public.answers (selected_option_id);
 
--- =============================================================
--- MIGRATION BLOCK - brings older installs up to current shape.
--- Safe to run on fresh installs (columns/constraints already
--- exist; the IF NOT EXISTS clauses make this a no-op).
--- =============================================================
+-- -------------------------------------------------------------
+-- 2. MIGRATIONS - add any columns that older installs lacked.
+--    IMPORTANT: this must run BEFORE indexes / constraints that
+--    reference these columns.
+-- -------------------------------------------------------------
+alter table public.questions        add column if not exists is_active  boolean not null default true;
 alter table public.questions        add column if not exists deleted_at timestamptz;
 alter table public.questions        add column if not exists updated_at timestamptz not null default now();
 alter table public.question_options add column if not exists is_active  boolean not null default true;
 alter table public.question_options add column if not exists deleted_at timestamptz;
 alter table public.question_options add column if not exists created_at timestamptz not null default now();
 
+-- -------------------------------------------------------------
+-- 3. INDEXES (safe now that columns exist)
+-- -------------------------------------------------------------
+create index if not exists users_created_at_idx              on public.users (created_at desc);
+create index if not exists users_session_id_idx              on public.users (session_id);
+
+create index if not exists questions_poll_id_idx             on public.questions (poll_id);
+create index if not exists questions_order_idx               on public.questions (poll_id, display_order);
+create index if not exists questions_is_active_idx           on public.questions (poll_id, is_active, deleted_at);
+
+create index if not exists question_options_question_id_idx  on public.question_options (question_id);
+create index if not exists question_options_is_active_idx    on public.question_options (question_id, is_active, deleted_at);
+create unique index if not exists question_options_unique_value
+  on public.question_options (question_id, option_value);
+
+create index if not exists submissions_poll_id_idx           on public.submissions (poll_id);
+create index if not exists submissions_user_id_idx           on public.submissions (user_id);
+create index if not exists submissions_submitted_at_idx      on public.submissions (submitted_at desc);
+
+create index if not exists answers_submission_id_idx         on public.answers (submission_id);
+create index if not exists answers_question_id_idx           on public.answers (question_id);
+create index if not exists answers_option_id_idx             on public.answers (selected_option_id);
+
+-- -------------------------------------------------------------
+-- 4. CHECK CONSTRAINTS (idempotent)
+-- -------------------------------------------------------------
 do $$
 begin
   if not exists (select 1 from pg_constraint where conname = 'questions_text_length_chk') then
@@ -128,9 +132,9 @@ begin
 end $$;
 
 -- =============================================================
--- ROW LEVEL SECURITY
+-- 5. ROW LEVEL SECURITY
 -- =============================================================
--- The dashboard is gated client-side by a passcode. Admin writes
+-- Dashboard is gated client-side by a passcode. Admin writes
 -- (insert/update on questions + question_options) are allowed
 -- for anon. For stricter production: move admin to Supabase
 -- Auth and scope these policies to an authenticated role.
@@ -142,7 +146,6 @@ alter table public.question_options enable row level security;
 alter table public.submissions      enable row level security;
 alter table public.answers          enable row level security;
 
--- Read policies (dashboard + poll rendering)
 drop policy if exists "read users"            on public.users;
 drop policy if exists "read polls"            on public.polls;
 drop policy if exists "read questions"        on public.questions;
@@ -157,7 +160,6 @@ create policy "read question_options" on public.question_options for select usin
 create policy "read submissions"      on public.submissions      for select using (true);
 create policy "read answers"          on public.answers          for select using (true);
 
--- Insert policies for poll submission flow
 drop policy if exists "insert users"       on public.users;
 drop policy if exists "insert submissions" on public.submissions;
 drop policy if exists "insert answers"     on public.answers;
@@ -166,7 +168,6 @@ create policy "insert users"       on public.users       for insert with check (
 create policy "insert submissions" on public.submissions for insert with check (true);
 create policy "insert answers"     on public.answers     for insert with check (true);
 
--- Admin policies for question management (dashboard)
 drop policy if exists "admin insert questions"        on public.questions;
 drop policy if exists "admin update questions"        on public.questions;
 drop policy if exists "admin insert question_options" on public.question_options;
@@ -178,7 +179,7 @@ create policy "admin insert question_options" on public.question_options for ins
 create policy "admin update question_options" on public.question_options for update using (true) with check (true);
 
 -- =============================================================
--- SEED DATA - default poll + 6 seed questions with Yes/Not Sure/No
+-- 6. SEED DATA - default poll + 6 seed questions with Yes/Not Sure/No
 -- =============================================================
 insert into public.polls (slug, title, description)
 values (
@@ -223,9 +224,10 @@ begin
 end $$;
 
 -- =============================================================
--- Aggregated view (active only)
+-- 7. AGGREGATED VIEW (active only)
 -- =============================================================
-create or replace view public.v_question_option_counts as
+drop view if exists public.v_question_option_counts;
+create view public.v_question_option_counts as
 select
   q.id            as question_id,
   q.question_text,
