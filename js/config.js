@@ -23,7 +23,7 @@ window.SWIFT_POLL_CONFIG = {
   // Poll identity - must match the slug seeded in Supabase
   POLL_SLUG: "swift-poll-default",
   POLL_TITLE: "Does your learning system...",
-  POLL_INTRO: "A quick pulse-check. Answer honestly - it takes under a minute.",
+  POLL_INTRO: "Answer a few quick questions. Takes less than a minute.",
 
   // Dashboard access - empty to make dashboard public
   DASHBOARD_PASSCODE: "1234"
