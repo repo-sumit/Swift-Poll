@@ -86,7 +86,15 @@
     [el.identity, el.question, el.success, el.empty].forEach((n) => n && n.classList.add("is-hidden"));
   }
   function showIdentity() { hideAll(); el.identity.classList.remove("is-hidden"); setTimeout(() => el.fullName && el.fullName.focus(), 50); }
-  function showQuestion() { hideAll(); el.question.classList.remove("is-hidden"); renderQuestion(); }
+  function showQuestion() {
+    // Defensive: never let the question screen render without a
+    // confirmed name + user. Any stray code path falls back to identity.
+    if (!state.user || !state.user.assignedUserId || !state.user.fullName) {
+      showIdentity();
+      return;
+    }
+    hideAll(); el.question.classList.remove("is-hidden"); renderQuestion();
+  }
   function showSuccess()  { hideAll(); el.success.classList.remove("is-hidden"); }
   function showEmpty()    { hideAll(); el.empty && el.empty.classList.remove("is-hidden"); }
 
