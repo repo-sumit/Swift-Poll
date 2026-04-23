@@ -463,23 +463,23 @@ declare
   v_user public.dashboard_users%rowtype;
   v_token uuid;
 begin
-  select * into v_user
-    from public.dashboard_users
-   where lower(display_name) = lower(p_display_name)
-     and is_active = true
-     and deleted_at is null
-     and password_hash = crypt(p_password, password_hash);
+  select d.* into v_user
+    from public.dashboard_users d
+   where lower(d.display_name) = lower(p_display_name)
+     and d.is_active = true
+     and d.deleted_at is null
+     and d.password_hash = crypt(p_password, d.password_hash);
 
   if v_user.id is null then
     return;  -- empty result = auth failure
   end if;
 
   -- Opportunistic cleanup of expired sessions
-  delete from public.dashboard_sessions where expires_at < now();
+  delete from public.dashboard_sessions s where s.expires_at < now();
 
   insert into public.dashboard_sessions (dashboard_user_id, role, expires_at)
   values (v_user.id, v_user.role, now() + interval '24 hours')
-  returning dashboard_sessions.token into v_token;
+  returning public.dashboard_sessions.token into v_token;
 
   return query
     select v_user.id, v_user.display_name, v_user.role, v_token;
@@ -563,8 +563,8 @@ begin
   perform public.validate_admin(p_token);
   if char_length(coalesce(p_display_name,'')) = 0 then raise exception 'display_name required'; end if;
   if char_length(coalesce(p_password,'')) < 4 then raise exception 'password too short'; end if;
-  if exists (select 1 from public.dashboard_users
-             where lower(display_name) = lower(p_display_name) and deleted_at is null) then
+  if exists (select 1 from public.dashboard_users d
+             where lower(d.display_name) = lower(p_display_name) and d.deleted_at is null) then
     raise exception 'display_name already exists';
   end if;
   insert into public.dashboard_users (display_name, role, password_hash, is_active)
@@ -579,8 +579,8 @@ language plpgsql security definer set search_path = public, extensions as $$
 begin
   perform public.validate_admin(p_token);
   if char_length(coalesce(p_new_name,'')) = 0 then raise exception 'display_name required'; end if;
-  if exists (select 1 from public.dashboard_users
-             where lower(display_name) = lower(p_new_name) and deleted_at is null and id <> p_id) then
+  if exists (select 1 from public.dashboard_users d
+             where lower(d.display_name) = lower(p_new_name) and d.deleted_at is null and d.id <> p_id) then
     raise exception 'display_name already exists';
   end if;
   update public.dashboard_users set display_name = p_new_name, updated_at = now() where id = p_id;
