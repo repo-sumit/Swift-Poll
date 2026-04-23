@@ -54,6 +54,13 @@
 
     </section>
 
+    <!-- Screen: Poll picker (shown when 2+ polls are available) -->
+    <section class="sp-card sp-card--poll is-hidden" data-screen="picker" aria-labelledby="picker-title">
+      <h1 id="picker-title" class="sp-card__title">Choose a survey</h1>
+      <p class="sp-card__subtitle">You have access to more than one. Pick one to begin.</p>
+      <div class="sp-poll-picker" data-poll-picker></div>
+    </section>
+
     <!-- Screen 2: Question -->
     <section class="sp-card sp-card--poll is-hidden" data-screen="question" aria-labelledby="q-title">
       <div class="sp-progress" aria-label="Poll progress">
@@ -115,10 +122,10 @@
   </footer>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-  <script src="js/config.js?v=5"></script>
-  <script src="js/utils.js?v=5"></script>
-  <script src="js/supabase.js?v=5"></script>
-  <script src="js/poll.js?v=5"></script>
+  <script src="js/config.js?v=6"></script>
+  <script src="js/utils.js?v=6"></script>
+  <script src="js/supabase.js?v=6"></script>
+  <script src="js/poll.js?v=6"></script>
   <script>document.querySelector("[data-year]").textContent = new Date().getFullYear();</script>
 </body>
 </html>

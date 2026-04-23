@@ -42,6 +42,12 @@
       </div>
     </section>
 
+    <section class="sp-filter-bar" aria-label="Poll selector">
+      <label class="sp-filter-bar__label" for="filter-poll">Poll</label>
+      <select id="filter-poll" class="sp-input sp-select sp-filter-bar__select" data-filter-poll></select>
+      <span class="sp-filter-bar__hint" data-poll-hint></span>
+    </section>
+
     <section class="sp-filter-bar" aria-label="Response filter">
       <label class="sp-filter-bar__label" for="filter-assigned-user">View responses for</label>
       <select id="filter-assigned-user" class="sp-input sp-select sp-filter-bar__select"
@@ -58,6 +64,48 @@
       <div class="sp-stat-card">
         <span class="sp-stat-card__label">Total submissions</span>
         <span class="sp-stat-card__value" data-total-submissions>-</span>
+      </div>
+    </section>
+
+    <!-- ================================================
+         Admin: Poll Management
+         ================================================ -->
+    <section class="sp-section sp-admin is-hidden" data-admin-only aria-labelledby="polls-title">
+      <div class="sp-admin__head">
+        <div>
+          <h2 id="polls-title" class="sp-section__title">Poll management</h2>
+          <p class="sp-admin__sub">Create, edit, archive polls. Map which users can access each poll.</p>
+        </div>
+      </div>
+
+      <form class="sp-card sp-admin__form" data-add-poll-form novalidate>
+        <h3 class="sp-admin__form-title">Create a new poll</h3>
+        <div class="sp-field-grid">
+          <div class="sp-field">
+            <label class="sp-field__label">Poll name <span class="sp-req">*</span></label>
+            <input class="sp-input" name="pollTitle" type="text" required maxlength="120"
+                   placeholder="e.g. Q1 Pulse Check" />
+          </div>
+          <div class="sp-field">
+            <label class="sp-field__label">Slug / ID <span class="sp-req">*</span></label>
+            <input class="sp-input" name="pollSlug" type="text" required maxlength="60"
+                   pattern="[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
+                   placeholder="q1-pulse-check" />
+          </div>
+        </div>
+        <div class="sp-field">
+          <label class="sp-field__label">Description</label>
+          <textarea class="sp-input sp-input--area" name="pollDescription" rows="2" maxlength="400"
+                    placeholder="What is this poll for?"></textarea>
+        </div>
+        <p class="sp-error" data-add-poll-error role="alert"></p>
+        <div class="sp-form__actions sp-admin__form-actions">
+          <button type="submit" class="sp-btn sp-btn--primary">Create Poll</button>
+        </div>
+      </form>
+
+      <div class="sp-admin__list" data-polls-list>
+        <p class="sp-muted sp-admin__list-empty">Loading polls...</p>
       </div>
     </section>
 
@@ -229,6 +277,60 @@
     </div>
   </div>
 
+  <!-- Poll visibility modal -->
+  <div class="sp-modal is-hidden" data-modal-visibility role="dialog" aria-modal="true" aria-labelledby="modal-vis-title">
+    <div class="sp-modal__backdrop" data-modal-cancel></div>
+    <div class="sp-modal__dialog sp-modal__dialog--wide" role="document">
+      <h3 id="modal-vis-title" class="sp-modal__title">Poll visibility</h3>
+      <p class="sp-modal__body" data-modal-vis-body>Toggle which users can access this poll.</p>
+      <div class="sp-vis-list" data-modal-vis-list></div>
+      <div class="sp-modal__actions">
+        <button type="button" class="sp-btn sp-btn--primary" data-modal-cancel>Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit poll modal -->
+  <div class="sp-modal is-hidden" data-modal-edit-poll role="dialog" aria-modal="true" aria-labelledby="modal-ep-title">
+    <div class="sp-modal__backdrop" data-modal-cancel></div>
+    <div class="sp-modal__dialog" role="document">
+      <h3 id="modal-ep-title" class="sp-modal__title">Edit poll</h3>
+      <div class="sp-field">
+        <label class="sp-field__label">Poll name</label>
+        <input class="sp-input" type="text" maxlength="120" data-modal-ep-title />
+      </div>
+      <div class="sp-field">
+        <label class="sp-field__label">Description</label>
+        <textarea class="sp-input sp-input--area" rows="2" maxlength="400" data-modal-ep-description></textarea>
+      </div>
+      <label class="sp-switch">
+        <input type="checkbox" data-modal-ep-active />
+        <span class="sp-switch__track" aria-hidden="true"></span>
+        <span class="sp-switch__label">Active</span>
+      </label>
+      <p class="sp-error" data-modal-ep-error role="alert"></p>
+      <div class="sp-modal__actions">
+        <button type="button" class="sp-btn sp-btn--ghost" data-modal-cancel>Cancel</button>
+        <button type="button" class="sp-btn sp-btn--primary" data-modal-ep-save>Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Archive poll modal -->
+  <div class="sp-modal is-hidden" data-modal-archive-poll role="dialog" aria-modal="true" aria-labelledby="modal-ap-title">
+    <div class="sp-modal__backdrop" data-modal-cancel></div>
+    <div class="sp-modal__dialog" role="document">
+      <h3 id="modal-ap-title" class="sp-modal__title">Archive this poll?</h3>
+      <p class="sp-modal__body" data-modal-ap-body>
+        The poll will be hidden from everyone. Historical data is preserved.
+      </p>
+      <div class="sp-modal__actions">
+        <button type="button" class="sp-btn sp-btn--ghost" data-modal-cancel>Cancel</button>
+        <button type="button" class="sp-btn sp-btn--danger" data-modal-ap-confirm>Archive</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Change password modal -->
   <div class="sp-modal is-hidden" data-modal-password role="dialog" aria-modal="true" aria-labelledby="modal-pw-title">
     <div class="sp-modal__backdrop" data-modal-cancel></div>
@@ -258,9 +360,9 @@
   </footer>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-  <script src="js/config.js?v=5"></script>
-  <script src="js/utils.js?v=5"></script>
-  <script src="js/supabase.js?v=5"></script>
-  <script src="js/dashboard.js?v=5"></script>
+  <script src="js/config.js?v=6"></script>
+  <script src="js/utils.js?v=6"></script>
+  <script src="js/supabase.js?v=6"></script>
+  <script src="js/dashboard.js?v=6"></script>
 </body>
 </html>

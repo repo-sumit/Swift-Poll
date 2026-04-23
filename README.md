@@ -166,6 +166,30 @@ Session notes:
 
 Backward compat: the migration backfills any existing `submissions` that pre-date the column to `user_1` so the `NOT NULL` + `CHECK` constraint applies cleanly.
 
+## 6c. Multi-poll
+
+Swift Poll now supports multiple polls. Key behaviour:
+
+- **Admin** creates polls from the dashboard: name, slug (unique, URL-safe), description, active flag. Edit or archive later.
+- **Visibility mapping** via `poll_user_access` lets the admin toggle which non-admin users can access which poll. Admins always see every poll.
+- **Respondent flow**: after entering name and picking a user from the dropdown, the poll page looks up polls visible to that user:
+  - **0 polls** -> empty state message.
+  - **1 poll** -> starts that poll directly.
+  - **2+ polls** -> a card picker is shown; each card has the poll name, slug, and description. Tap a card to begin.
+- **Dashboard** has a **Poll** selector at the top. Every section (aggregates, user-wise responses, manage questions, reset, CSV export) is scoped to the selected poll.
+- **Reset** is now scoped to the selected poll only: it downloads a CSV for that poll, then deletes just that poll's questions / options / submissions / answers. Users and other polls are untouched.
+
+### Migration notes
+
+- The `polls` table gains `is_active`, `deleted_at`, `updated_at`.
+- A new `poll_user_access(poll_id, dashboard_user_id, is_enabled)` table is introduced.
+- Seed logic grants every existing non-admin user access to the existing default poll (`swift-poll-default`), so nothing breaks for current users.
+- Existing submissions and questions remain tied to the default poll via `poll_id`.
+
+### Option colours
+
+MCQ option bars in the admin analytics now use a solid distinct palette assigned by option order (blue / green / amber / purple / red), not the legacy yes/no/not-sure shading.
+
 ## 7. How dashboard works
 
 - **Aggregated counts**: one query fetches all `answers` for the active poll, then counts are tallied client-side. Questions and options come from a cached poll graph so empty options still render with 0.

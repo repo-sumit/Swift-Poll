@@ -1,31 +1,34 @@
 /**
- * Swift Poll - dashboard controller (v4: roles + user mgmt + reset)
+ * Swift Poll - dashboard controller (multi-poll).
  *
- * Admin:
- *   - Manage Questions (MCQ/text, required flag)
- *   - Manage Users (add/rename/change-password/soft-delete)
- *   - Delete any submission
- *   - Export CSV, Reset poll data (export-then-wipe)
- * Normal user:
- *   - Scope locked to their own user filter
- *   - No management, no deletes, no reset
+ * State:
+ *   session        = { id, displayName, role } from sessionStorage
+ *   accessiblePolls = polls visible to this session
+ *   selectedPollId  = drives every read/write below it
+ *   currentFilter   = "all" or dashboard_user.id for user-wise scope
  *
- * Session shape: { id, displayName, role } in sessionStorage
- * under `swift_poll.dashboard_session`.
+ * Admins see all polls and a full management surface. Normal users
+ * see only their mapped polls and no management controls.
  */
 (function () {
   const SESSION_KEY = "swift_poll.dashboard_session";
-  const LIMITS = (SP.db && SP.db.LIMITS) || { OPTION_MIN: 2, OPTION_MAX: 5 };
+  const SELECTED_POLL_KEY = "swift_poll.selected_poll";
 
   let el = {};
-  let session = null;           // { id, displayName, role }
-  let dashboardUsers = [];      // full list (admin + user)
-  let lastUserRows = [];
+  let session = null;
+  let accessiblePolls = [];
+  let selectedPollId = null;
+  let selectedPoll = null;
+  let currentFilter = "all";
+  let dashboardUsers = [];
   let activeQuestions = [];
+  let lastUserRows = [];
   let pendingDeleteQId = null;
   let pendingDeleteSubId = null;
   let pendingPasswordUserId = null;
-  let currentFilter = "all";    // "all" or dashboard_users.id
+  let pendingArchivePollId = null;
+  let editingPollId = null;
+  let visibilityPollId = null;
 
   document.addEventListener("DOMContentLoaded", async () => {
     SP.utils.setHeaderBrand();
@@ -36,47 +39,31 @@
       window.location.replace("dashboard-access.html");
       return;
     }
-
     showWho();
     applyRoleVisibility();
-    wireCommonButtons();
+    wireCommon();
     wireAdminForms();
     wireModals();
 
     try {
-      dashboardUsers = await SP.db.listDashboardUsers();
+      const [users, polls] = await Promise.all([
+        SP.db.listDashboardUsers(),
+        SP.db.listPollsForDashboardUser(session.id)
+      ]);
+      dashboardUsers = users;
+      accessiblePolls = polls;
     } catch (err) {
       console.error(err);
-      el.errorBox.textContent = friendlyError(err, "Could not load dashboard accounts.");
+      el.errorBox.textContent = friendlyError(err, "Could not load dashboard.");
       return;
     }
 
-    initFilter();
+    initPollSelector();
+    initUserFilter();
+    if (isAdmin()) await renderPollManagement();
     await loadAll();
   });
 
-  // -------------------------------------------------------
-  // Session / role
-  // -------------------------------------------------------
-  function readSession() {
-    try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null"); } catch (_) { return null; }
-  }
-  function clearSession() { sessionStorage.removeItem(SESSION_KEY); }
-  function isAdmin() { return session && session.role === "admin"; }
-
-  function showWho() {
-    if (!el.who) return;
-    const badge = isAdmin() ? "Admin" : "User";
-    el.who.textContent = `${session.displayName} (${badge})`;
-  }
-
-  function applyRoleVisibility() {
-    const adminOnly = document.querySelectorAll("[data-admin-only]");
-    adminOnly.forEach((n) => n.classList.toggle("is-hidden", !isAdmin()));
-  }
-
-  // -------------------------------------------------------
-  // DOM cache
   // -------------------------------------------------------
   function cacheEls() {
     el = {
@@ -94,10 +81,11 @@
       resetBtn:       document.querySelector("[data-open-reset]"),
       logoutBtn:      document.querySelector("[data-logout]"),
 
+      pollSelect:     document.querySelector("[data-filter-poll]"),
+      pollHint:       document.querySelector("[data-poll-hint]"),
       filterSelect:   document.querySelector("[data-filter-user]"),
       filterHint:     document.querySelector("[data-filter-hint]"),
 
-      // Admin: questions
       addForm:        document.querySelector("[data-add-question-form]"),
       addSubmit:      document.querySelector("[data-add-question-submit]"),
       addReset:       document.querySelector("[data-add-question-reset]"),
@@ -110,12 +98,14 @@
       qList:          document.querySelector("[data-questions-list]"),
       qCount:         document.querySelector("[data-questions-count]"),
 
-      // Admin: users
       addUserForm:    document.querySelector("[data-add-user-form]"),
       addUserError:   document.querySelector("[data-add-user-error]"),
       usersList:      document.querySelector("[data-users-list]"),
 
-      // Modals
+      addPollForm:    document.querySelector("[data-add-poll-form]"),
+      addPollError:   document.querySelector("[data-add-poll-error]"),
+      pollsList:      document.querySelector("[data-polls-list]"),
+
       modalDq:        document.querySelector("[data-modal-delete-q]"),
       modalDqBody:    document.querySelector("[data-modal-dq-body]"),
       modalDqConfirm: document.querySelector("[data-modal-dq-confirm]"),
@@ -130,22 +120,40 @@
       modalPwInput:   document.querySelector("[data-modal-pw-input]"),
       modalPwBody:    document.querySelector("[data-modal-pw-body]"),
       modalPwError:   document.querySelector("[data-modal-pw-error]"),
-      modalPwConfirm: document.querySelector("[data-modal-pw-confirm]")
+      modalPwConfirm: document.querySelector("[data-modal-pw-confirm]"),
+
+      modalVis:       document.querySelector("[data-modal-visibility]"),
+      modalVisBody:   document.querySelector("[data-modal-vis-body]"),
+      modalVisList:   document.querySelector("[data-modal-vis-list]"),
+
+      modalEp:        document.querySelector("[data-modal-edit-poll]"),
+      modalEpTitle:   document.querySelector("[data-modal-ep-title]"),
+      modalEpDesc:    document.querySelector("[data-modal-ep-description]"),
+      modalEpActive:  document.querySelector("[data-modal-ep-active]"),
+      modalEpError:   document.querySelector("[data-modal-ep-error]"),
+      modalEpSave:    document.querySelector("[data-modal-ep-save]"),
+
+      modalAp:        document.querySelector("[data-modal-archive-poll]"),
+      modalApBody:    document.querySelector("[data-modal-ap-body]"),
+      modalApConfirm: document.querySelector("[data-modal-ap-confirm]")
     };
   }
 
   // -------------------------------------------------------
-  // Common top-bar buttons
-  // -------------------------------------------------------
-  function wireCommonButtons() {
+  function readSession() { try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null"); } catch (_) { return null; } }
+  function clearSession() { sessionStorage.removeItem(SESSION_KEY); }
+  function isAdmin() { return session && session.role === "admin"; }
+  function showWho() { el.who && (el.who.textContent = `${session.displayName} (${isAdmin() ? "Admin" : "User"})`); }
+  function applyRoleVisibility() {
+    document.querySelectorAll("[data-admin-only]").forEach((n) => n.classList.toggle("is-hidden", !isAdmin()));
+  }
+
+  function wireCommon() {
     el.refreshBtn && el.refreshBtn.addEventListener("click", loadAll);
     el.exportBtn  && el.exportBtn.addEventListener("click", exportCsv);
-    el.logoutBtn  && el.logoutBtn.addEventListener("click", () => {
-      clearSession();
-      window.location.replace("dashboard-access.html");
-    });
+    el.logoutBtn  && el.logoutBtn.addEventListener("click", () => { clearSession(); window.location.replace("dashboard-access.html"); });
     el.resetBtn && el.resetBtn.addEventListener("click", () => {
-      if (!isAdmin()) return;
+      if (!isAdmin() || !selectedPollId) return;
       el.modalResetInput.value = "";
       el.modalResetConfirm.disabled = true;
       el.modalResetError.textContent = "";
@@ -155,37 +163,70 @@
   }
 
   // -------------------------------------------------------
-  // Filter bar
+  // Poll selector
   // -------------------------------------------------------
-  function initFilter() {
+  function initPollSelector() {
+    el.pollSelect.innerHTML = "";
+    if (!accessiblePolls.length) {
+      const opt = document.createElement("option");
+      opt.value = ""; opt.textContent = "No polls available";
+      el.pollSelect.appendChild(opt);
+      el.pollSelect.disabled = true;
+      el.pollHint.textContent = isAdmin()
+        ? "Create a poll below to get started."
+        : "No polls are assigned to your account yet.";
+      selectedPollId = null; selectedPoll = null;
+      return;
+    }
+
+    accessiblePolls.forEach((p) => {
+      const o = document.createElement("option");
+      o.value = p.id;
+      o.textContent = p.title + (p.is_active === false ? " (inactive)" : "");
+      el.pollSelect.appendChild(o);
+    });
+
+    const stored = sessionStorage.getItem(SELECTED_POLL_KEY);
+    const fromStored = accessiblePolls.find((p) => p.id === stored);
+    selectedPoll = fromStored || accessiblePolls[0];
+    selectedPollId = selectedPoll.id;
+    el.pollSelect.value = selectedPollId;
+    updatePollHint();
+
+    el.pollSelect.addEventListener("change", async () => {
+      selectedPollId = el.pollSelect.value;
+      selectedPoll = accessiblePolls.find((p) => p.id === selectedPollId);
+      sessionStorage.setItem(SELECTED_POLL_KEY, selectedPollId);
+      updatePollHint();
+      await loadAll();
+    });
+  }
+
+  function updatePollHint() {
+    if (!el.pollHint) return;
+    if (!selectedPoll) { el.pollHint.textContent = ""; return; }
+    const desc = selectedPoll.description ? ` ${selectedPoll.description}` : "";
+    el.pollHint.textContent = `${selectedPoll.slug}${desc}`;
+  }
+
+  function initUserFilter() {
     const sel = el.filterSelect;
     sel.innerHTML = "";
-
     if (isAdmin()) {
-      // Admin sees "All Users" + every non-admin user
-      const all = document.createElement("option");
-      all.value = "all"; all.textContent = "All Users";
+      const all = document.createElement("option"); all.value = "all"; all.textContent = "All Users";
       sel.appendChild(all);
-      dashboardUsers
-        .filter((u) => u.role === "user")
-        .forEach((u) => {
-          const o = document.createElement("option");
-          o.value = u.id; o.textContent = u.display_name;
-          sel.appendChild(o);
-        });
-      sel.disabled = false;
-      currentFilter = "all";
+      dashboardUsers.filter((u) => u.role === "user").forEach((u) => {
+        const o = document.createElement("option"); o.value = u.id; o.textContent = u.display_name;
+        sel.appendChild(o);
+      });
+      sel.disabled = false; currentFilter = "all";
     } else {
-      // Normal user: only their own scope, locked
-      const o = document.createElement("option");
-      o.value = session.id; o.textContent = session.displayName;
+      const o = document.createElement("option"); o.value = session.id; o.textContent = session.displayName;
       sel.appendChild(o);
-      sel.disabled = true;
-      currentFilter = session.id;
+      sel.disabled = true; currentFilter = session.id;
     }
     sel.value = currentFilter;
     updateFilterHint();
-
     sel.addEventListener("change", async () => {
       currentFilter = sel.value || "all";
       updateFilterHint();
@@ -195,46 +236,42 @@
 
   function updateFilterHint() {
     if (!el.filterHint) return;
-    if (currentFilter === "all") {
-      el.filterHint.textContent = "Showing data from every user.";
-    } else {
-      const match = dashboardUsers.find((u) => u.id === currentFilter);
-      el.filterHint.textContent = match
-        ? `Showing data tagged to ${match.display_name}.`
-        : "Showing filtered data.";
-    }
+    if (currentFilter === "all") { el.filterHint.textContent = "Showing data from every user."; return; }
+    const match = dashboardUsers.find((u) => u.id === currentFilter);
+    el.filterHint.textContent = match ? `Showing data tagged to ${match.display_name}.` : "";
   }
 
-  function currentFilterObject() { return { assignedUserId: currentFilter }; }
+  function filterArgs() { return { pollId: selectedPollId, assignedUserId: currentFilter }; }
 
   // -------------------------------------------------------
   // Main loader
   // -------------------------------------------------------
   async function loadAll() {
+    if (!selectedPollId) {
+      el.total.textContent = "-";
+      el.aggregates.innerHTML = "";
+      el.users.innerHTML = "";
+      el.empty.classList.remove("is-hidden");
+      if (isAdmin()) renderAdminList([]);
+      return;
+    }
     showLoading(true);
     el.errorBox.textContent = "";
     el.empty.classList.add("is-hidden");
 
     try {
-      SP.db.invalidateCache();
-      const filter = currentFilterObject();
-
+      SP.db.invalidateCache(selectedPollId);
+      const filter = filterArgs();
       const [questions, agg, userRows, total] = await Promise.all([
-        SP.db.getActiveQuestions(),
+        SP.db.getActiveQuestions(selectedPollId),
         SP.db.getAggregatedResults(filter),
         SP.db.getUserResponses(filter),
         SP.db.getTotalSubmissions(filter)
       ]);
-
       activeQuestions = questions;
       lastUserRows = userRows;
       el.total.textContent = String(total);
-
-      if (isAdmin()) {
-        renderAdminList(activeQuestions);
-        renderUsersAdmin();
-      }
-
+      if (isAdmin()) { renderAdminList(activeQuestions); renderUsersAdmin(); }
       if (!total || !userRows.length) {
         el.aggregates.innerHTML = "";
         el.users.innerHTML = "";
@@ -246,15 +283,14 @@
       }
     } catch (err) {
       console.error(err);
-      el.errorBox.textContent = friendlyError(err, "Could not load dashboard. Please try refreshing.");
+      el.errorBox.textContent = friendlyError(err, "Could not load dashboard.");
     } finally {
       showLoading(false);
     }
   }
 
   function tweakEmptyMessage() {
-    const h2 = el.empty.querySelector("h2");
-    const p  = el.empty.querySelector("p");
+    const h2 = el.empty.querySelector("h2"); const p = el.empty.querySelector("p");
     if (!h2 || !p) return;
     if (currentFilter !== "all") {
       const match = dashboardUsers.find((u) => u.id === currentFilter);
@@ -269,59 +305,53 @@
   function showLoading(on) { el.loading && el.loading.classList.toggle("is-hidden", !on); }
 
   // -------------------------------------------------------
-  // Admin: add question form (dynamic options for MCQ)
+  // Admin: questions (scoped to selected poll)
   // -------------------------------------------------------
   function wireAdminForms() {
     if (!el.addForm) return;
-
     wireCounterFor("questionText", 150);
-
     el.qTypeSelect.addEventListener("change", refreshOptionFields);
     el.addOptionBtn.addEventListener("click", () => {
       const count = el.optionsWrap.querySelectorAll(".sp-option-field").length;
-      if (count < LIMITS.OPTION_MAX) addOptionField("");
+      if (count < SP.db.LIMITS.OPTION_MAX) addOptionField("");
       renderOptionsMeta();
     });
-
     el.addReset && el.addReset.addEventListener("click", () => {
-      el.addForm.reset();
-      el.addError.textContent = "";
+      el.addForm.reset(); el.addError.textContent = "";
       refreshOptionFields();
-      document.querySelector("[data-counter-for='questionText']").textContent = "0 / 150";
+      const c = document.querySelector("[data-counter-for='questionText']");
+      if (c) c.textContent = "0 / 150";
     });
 
     el.addForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       el.addError.textContent = "";
-
+      if (!selectedPollId) { el.addError.textContent = "Select a poll first."; return; }
       const fd = new FormData(el.addForm);
       const payload = {
+        pollId: selectedPollId,
         text: String(fd.get("questionText") || ""),
         type: String(fd.get("questionType") || "single_select"),
         required: fd.get("isRequired") === "on",
         options: Array.from(el.optionsWrap.querySelectorAll("input.sp-option-field__input")).map((n) => n.value)
       };
-
       el.addSubmit.disabled = true;
-      const originalLabel = el.addSubmit.textContent;
-      el.addSubmit.textContent = "Saving...";
+      const original = el.addSubmit.textContent; el.addSubmit.textContent = "Saving...";
       try {
         await SP.db.createQuestionWithOptions(payload);
-        el.addForm.reset();
-        refreshOptionFields();
+        el.addForm.reset(); refreshOptionFields();
         SP.utils.toast("Question added.", "ok");
         await loadAll();
+        if (isAdmin()) renderPollManagement();
       } catch (err) {
-        console.error(err);
-        const errors = (err && err.validation) || [err?.message || "Could not save the question."];
+        const errors = (err && err.validation) || [err?.message || "Could not save."];
         el.addError.innerHTML = errors.map((m) => `&bull; ${SP.utils.escapeHtml(m)}`).join("<br>");
       } finally {
         el.addSubmit.disabled = false;
-        el.addSubmit.textContent = originalLabel || "Add Question";
+        el.addSubmit.textContent = original || "Add Question";
       }
     });
 
-    // User mgmt form
     if (el.addUserForm) {
       el.addUserForm.addEventListener("submit", async (e) => {
         e.preventDefault();
@@ -329,43 +359,85 @@
         const fd = new FormData(el.addUserForm);
         const displayName = String(fd.get("userName") || "").trim();
         const password    = String(fd.get("userPassword") || "");
-
-        const submitBtn = el.addUserForm.querySelector("button[type='submit']");
-        submitBtn.disabled = true;
+        const btn = el.addUserForm.querySelector("button[type='submit']"); btn.disabled = true;
         try {
           await SP.db.createDashboardUser({ displayName, password, role: "user" });
           el.addUserForm.reset();
           SP.utils.toast("User created.", "ok");
           dashboardUsers = await SP.db.listDashboardUsers();
-          renderUsersAdmin();
-          refreshFilterOptions();
+          renderUsersAdmin(); refreshFilterOptions();
+          if (isAdmin()) renderPollManagement();
         } catch (err) {
-          console.error(err);
           el.addUserError.textContent = friendlyError(err, "Could not add user.");
-        } finally {
-          submitBtn.disabled = false;
-        }
+        } finally { btn.disabled = false; }
+      });
+    }
+
+    if (el.addPollForm) {
+      el.addPollForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        el.addPollError.textContent = "";
+        const fd = new FormData(el.addPollForm);
+        const payload = {
+          title: String(fd.get("pollTitle") || ""),
+          slug:  String(fd.get("pollSlug") || ""),
+          description: String(fd.get("pollDescription") || ""),
+          isActive: true
+        };
+        const btn = el.addPollForm.querySelector("button[type='submit']"); btn.disabled = true;
+        try {
+          const newPoll = await SP.db.createPoll(payload);
+          el.addPollForm.reset();
+          SP.utils.toast("Poll created.", "ok");
+          accessiblePolls = await SP.db.listPollsForDashboardUser(session.id);
+          rebuildPollSelector(newPoll.id);
+          await renderPollManagement();
+          await loadAll();
+        } catch (err) {
+          const errors = (err && err.validation) || [err?.message || "Could not create poll."];
+          el.addPollError.innerHTML = errors.map((m) => `&bull; ${SP.utils.escapeHtml(m)}`).join("<br>");
+        } finally { btn.disabled = false; }
       });
     }
 
     refreshOptionFields();
   }
 
+  function rebuildPollSelector(preferredPollId) {
+    el.pollSelect.innerHTML = "";
+    el.pollSelect.disabled = accessiblePolls.length === 0;
+    accessiblePolls.forEach((p) => {
+      const o = document.createElement("option");
+      o.value = p.id;
+      o.textContent = p.title + (p.is_active === false ? " (inactive)" : "");
+      el.pollSelect.appendChild(o);
+    });
+    const next = accessiblePolls.find((p) => p.id === preferredPollId)
+              || accessiblePolls.find((p) => p.id === selectedPollId)
+              || accessiblePolls[0]
+              || null;
+    if (next) {
+      selectedPoll = next; selectedPollId = next.id;
+      el.pollSelect.value = selectedPollId;
+      sessionStorage.setItem(SELECTED_POLL_KEY, selectedPollId);
+    } else {
+      selectedPoll = null; selectedPollId = null;
+    }
+    updatePollHint();
+  }
+
   function refreshFilterOptions() {
     if (!isAdmin()) return;
     const current = el.filterSelect.value;
     el.filterSelect.innerHTML = "";
-    const all = document.createElement("option");
-    all.value = "all"; all.textContent = "All Users";
+    const all = document.createElement("option"); all.value = "all"; all.textContent = "All Users";
     el.filterSelect.appendChild(all);
     dashboardUsers.filter((u) => u.role === "user").forEach((u) => {
-      const o = document.createElement("option");
-      o.value = u.id; o.textContent = u.display_name;
+      const o = document.createElement("option"); o.value = u.id; o.textContent = u.display_name;
       el.filterSelect.appendChild(o);
     });
     el.filterSelect.value = dashboardUsers.find((u) => u.id === current) ? current : "all";
-    currentFilter = el.filterSelect.value;
-    updateFilterHint();
+    currentFilter = el.filterSelect.value; updateFilterHint();
   }
 
   function wireCounterFor(name, max) {
@@ -380,19 +452,14 @@
     const type = el.qTypeSelect.value;
     el.optionsWrap.innerHTML = "";
     if (type === "text_input") {
-      el.optionsActions.classList.add("is-hidden");
-      el.optionsMeta.textContent = "";
-      return;
+      el.optionsActions.classList.add("is-hidden"); el.optionsMeta.textContent = ""; return;
     }
     el.optionsActions.classList.remove("is-hidden");
-    addOptionField("");
-    addOptionField("");
-    renderOptionsMeta();
+    addOptionField(""); addOptionField(""); renderOptionsMeta();
   }
 
   function addOptionField(value) {
-    const current = el.optionsWrap.querySelectorAll(".sp-option-field").length;
-    const idx = current + 1;
+    const idx = el.optionsWrap.querySelectorAll(".sp-option-field").length + 1;
     const field = document.createElement("div");
     field.className = "sp-field sp-option-field";
     field.innerHTML = `
@@ -404,51 +471,45 @@
         <input class="sp-input sp-option-field__input" type="text" maxlength="75"
                placeholder="Type option ${idx}" value="${SP.utils.escapeHtml(value || "")}" />
         <button type="button" class="sp-btn sp-btn--ghost sp-btn--sm sp-option-field__remove" aria-label="Remove option">&times;</button>
-      </div>
-    `;
+      </div>`;
     const input = field.querySelector("input");
     const counter = field.querySelector("[data-opt-counter]");
-    const update = () => { counter.textContent = `${input.value.length} / 75`; };
-    input.addEventListener("input", update); update();
-
+    const upd = () => { counter.textContent = `${input.value.length} / 75`; };
+    input.addEventListener("input", upd); upd();
     field.querySelector(".sp-option-field__remove").addEventListener("click", () => {
-      if (el.optionsWrap.querySelectorAll(".sp-option-field").length <= LIMITS.OPTION_MIN) {
-        SP.utils.toast(`At least ${LIMITS.OPTION_MIN} options required.`, "error");
+      if (el.optionsWrap.querySelectorAll(".sp-option-field").length <= SP.db.LIMITS.OPTION_MIN) {
+        SP.utils.toast(`At least ${SP.db.LIMITS.OPTION_MIN} options required.`, "error");
         return;
       }
-      field.remove();
-      reindexOptionLabels();
-      renderOptionsMeta();
+      field.remove(); reindexOptionLabels(); renderOptionsMeta();
     });
-    el.optionsWrap.appendChild(field);
-    reindexOptionLabels();
+    el.optionsWrap.appendChild(field); reindexOptionLabels();
   }
 
   function reindexOptionLabels() {
-    const fields = el.optionsWrap.querySelectorAll(".sp-option-field");
-    fields.forEach((f, i) => {
+    el.optionsWrap.querySelectorAll(".sp-option-field").forEach((f, i) => {
       const lab = f.querySelector(".sp-field__label");
       const cnt = f.querySelector("[data-opt-counter]");
       if (lab) lab.childNodes[0].nodeValue = `Option ${i + 1} `;
-      const input = f.querySelector("input");
-      if (input) input.placeholder = `Type option ${i + 1}`;
-      if (cnt && input) cnt.textContent = `${input.value.length} / 75`;
+      const inp = f.querySelector("input");
+      if (inp) inp.placeholder = `Type option ${i + 1}`;
+      if (cnt && inp) cnt.textContent = `${inp.value.length} / 75`;
     });
   }
-
   function renderOptionsMeta() {
     const count = el.optionsWrap.querySelectorAll(".sp-option-field").length;
-    el.optionsMeta.textContent = `${count} / ${LIMITS.OPTION_MAX} options (min ${LIMITS.OPTION_MIN})`;
-    el.addOptionBtn.disabled = count >= LIMITS.OPTION_MAX;
+    el.optionsMeta.textContent = `${count} / ${SP.db.LIMITS.OPTION_MAX} options (min ${SP.db.LIMITS.OPTION_MIN})`;
+    el.addOptionBtn.disabled = count >= SP.db.LIMITS.OPTION_MAX;
   }
 
   // -------------------------------------------------------
-  // Admin: list + delete questions
+  // Admin: questions list
   // -------------------------------------------------------
   function renderAdminList(questions) {
+    if (!el.qList) return;
     el.qCount.textContent = String(questions.length);
     if (!questions.length) {
-      el.qList.innerHTML = `<p class="sp-muted sp-admin__list-empty">No questions yet. Add your first above.</p>`;
+      el.qList.innerHTML = `<p class="sp-muted sp-admin__list-empty">No questions yet for this poll.</p>`;
       return;
     }
     el.qList.innerHTML = questions.map((q, i) => {
@@ -486,7 +547,7 @@
   }
 
   // -------------------------------------------------------
-  // Admin: list + manage users
+  // Admin: users list
   // -------------------------------------------------------
   function renderUsersAdmin() {
     if (!el.usersList) return;
@@ -495,7 +556,7 @@
       return `
         <article class="sp-user-admin" data-user-row-id="${SP.utils.escapeHtml(u.id)}">
           <div class="sp-user-admin__main">
-            <span class="sp-user-admin__name" data-user-name>${SP.utils.escapeHtml(u.display_name)}</span>
+            <span class="sp-user-admin__name">${SP.utils.escapeHtml(u.display_name)}</span>
             <span class="sp-pill sp-pill--${u.role === "admin" ? "req" : ""}">${u.role === "admin" ? "Admin" : "User"}</span>
             ${isSelf ? `<span class="sp-pill">You</span>` : ""}
           </div>
@@ -506,16 +567,9 @@
           </div>
         </article>`;
     }).join("");
-
-    el.usersList.querySelectorAll("[data-user-rename]").forEach((btn) => {
-      btn.addEventListener("click", () => renameUser(btn.closest("[data-user-row-id]")));
-    });
-    el.usersList.querySelectorAll("[data-user-password]").forEach((btn) => {
-      btn.addEventListener("click", () => openPasswordModal(btn.closest("[data-user-row-id]")));
-    });
-    el.usersList.querySelectorAll("[data-user-delete]").forEach((btn) => {
-      btn.addEventListener("click", () => deleteUser(btn.closest("[data-user-row-id]")));
-    });
+    el.usersList.querySelectorAll("[data-user-rename]").forEach((b) => b.addEventListener("click", () => renameUser(b.closest("[data-user-row-id]"))));
+    el.usersList.querySelectorAll("[data-user-password]").forEach((b) => b.addEventListener("click", () => openPasswordModal(b.closest("[data-user-row-id]"))));
+    el.usersList.querySelectorAll("[data-user-delete]").forEach((b) => b.addEventListener("click", () => deleteUser(b.closest("[data-user-row-id]"))));
   }
 
   async function renameUser(row) {
@@ -524,40 +578,29 @@
     if (!user) return;
     const next = window.prompt("New display name:", user.display_name);
     if (next == null) return;
-    const trimmed = next.trim();
-    if (!trimmed || trimmed === user.display_name) return;
+    const t = next.trim(); if (!t || t === user.display_name) return;
     try {
-      await SP.db.renameDashboardUser(id, trimmed);
+      await SP.db.renameDashboardUser(id, t);
       SP.utils.toast("Renamed.", "ok");
       dashboardUsers = await SP.db.listDashboardUsers();
-      renderUsersAdmin();
-      refreshFilterOptions();
-      await loadAll();
-    } catch (err) {
-      SP.utils.toast(friendlyError(err, "Could not rename."), "error");
-    }
+      renderUsersAdmin(); refreshFilterOptions(); await loadAll();
+    } catch (err) { SP.utils.toast(friendlyError(err, "Could not rename."), "error"); }
   }
-
   async function deleteUser(row) {
     const id = row.getAttribute("data-user-row-id");
-    const user = dashboardUsers.find((u) => u.id === id);
-    if (!user) return;
-    if (!window.confirm(`Deactivate "${user.display_name}"? Old responses are kept, but they cannot log in.`)) return;
+    const user = dashboardUsers.find((u) => u.id === id); if (!user) return;
+    if (!window.confirm(`Deactivate "${user.display_name}"? Old responses are kept.`)) return;
     try {
       await SP.db.deleteDashboardUser(id);
       SP.utils.toast("User deactivated.", "ok");
       dashboardUsers = await SP.db.listDashboardUsers();
-      renderUsersAdmin();
-      refreshFilterOptions();
-    } catch (err) {
-      SP.utils.toast(friendlyError(err, "Could not deactivate."), "error");
-    }
+      renderUsersAdmin(); refreshFilterOptions();
+      if (isAdmin()) renderPollManagement();
+    } catch (err) { SP.utils.toast(friendlyError(err, "Could not deactivate."), "error"); }
   }
-
   function openPasswordModal(row) {
     const id = row.getAttribute("data-user-row-id");
-    const user = dashboardUsers.find((u) => u.id === id);
-    if (!user) return;
+    const user = dashboardUsers.find((u) => u.id === id); if (!user) return;
     pendingPasswordUserId = id;
     el.modalPwInput.value = "";
     el.modalPwError.textContent = "";
@@ -567,74 +610,168 @@
   }
 
   // -------------------------------------------------------
+  // Admin: poll management
+  // -------------------------------------------------------
+  async function renderPollManagement() {
+    if (!el.pollsList) return;
+    // Admin sees every non-deleted poll (including inactive) for management
+    const all = await SP.db.listAllPolls();
+    if (!all.length) {
+      el.pollsList.innerHTML = `<p class="sp-muted sp-admin__list-empty">No polls yet. Create one above.</p>`;
+      return;
+    }
+
+    // Fetch stats in parallel
+    const stats = await Promise.all(all.map((p) => SP.db.getPollStats(p.id).catch(() => ({}))));
+
+    el.pollsList.innerHTML = all.map((p, i) => {
+      const s = stats[i] || {};
+      const status = p.is_active
+        ? `<span class="sp-pill sp-pill--req">Active</span>`
+        : `<span class="sp-pill">Inactive</span>`;
+      return `
+        <article class="sp-poll-row" data-poll-row-id="${SP.utils.escapeHtml(p.id)}">
+          <header class="sp-poll-row__head">
+            <div class="sp-poll-row__title">
+              <h4>${SP.utils.escapeHtml(p.title)}</h4>
+              <span class="sp-muted">${SP.utils.escapeHtml(p.slug)}</span>
+            </div>
+            ${status}
+          </header>
+          ${p.description ? `<p class="sp-muted sp-poll-row__desc">${SP.utils.escapeHtml(p.description)}</p>` : ""}
+          <div class="sp-poll-row__stats">
+            <span><strong>${s.questionCount || 0}</strong> questions</span>
+            <span><strong>${s.accessCount || 0}</strong> users assigned</span>
+            <span><strong>${s.submissionCount || 0}</strong> submissions</span>
+          </div>
+          <div class="sp-poll-row__actions">
+            <button type="button" class="sp-btn sp-btn--ghost sp-btn--sm" data-poll-visibility>Visibility</button>
+            <button type="button" class="sp-btn sp-btn--ghost sp-btn--sm" data-poll-edit>Edit</button>
+            <button type="button" class="sp-btn sp-btn--danger sp-btn--sm" data-poll-archive>Archive</button>
+          </div>
+        </article>`;
+    }).join("");
+
+    el.pollsList.querySelectorAll("[data-poll-visibility]").forEach((b) => b.addEventListener("click", () => openVisibilityModal(b.closest("[data-poll-row-id]").getAttribute("data-poll-row-id"))));
+    el.pollsList.querySelectorAll("[data-poll-edit]").forEach((b) => b.addEventListener("click", () => openEditPollModal(b.closest("[data-poll-row-id]").getAttribute("data-poll-row-id"))));
+    el.pollsList.querySelectorAll("[data-poll-archive]").forEach((b) => b.addEventListener("click", () => openArchiveModal(b.closest("[data-poll-row-id]").getAttribute("data-poll-row-id"))));
+  }
+
+  async function openVisibilityModal(pollId) {
+    visibilityPollId = pollId;
+    const poll = (await SP.db.listAllPolls()).find((p) => p.id === pollId);
+    el.modalVisBody.textContent = `Toggle which users can access "${poll?.title || "this poll"}".`;
+    const map = await SP.db.getPollAccessMap(pollId);
+    const users = dashboardUsers.filter((u) => u.role === "user" && u.is_active);
+    el.modalVisList.innerHTML = users.length
+      ? users.map((u) => {
+          const on = map.get(u.id) === true;
+          return `
+            <label class="sp-vis-row">
+              <span class="sp-vis-row__name">${SP.utils.escapeHtml(u.display_name)}</span>
+              <span class="sp-switch sp-switch--compact">
+                <input type="checkbox" data-vis-user="${SP.utils.escapeHtml(u.id)}" ${on ? "checked" : ""} />
+                <span class="sp-switch__track" aria-hidden="true"></span>
+              </span>
+            </label>`;
+        }).join("")
+      : `<p class="sp-muted">No active users.</p>`;
+    openModal(el.modalVis);
+
+    el.modalVisList.querySelectorAll("[data-vis-user]").forEach((chk) => {
+      chk.addEventListener("change", async () => {
+        const uid = chk.getAttribute("data-vis-user");
+        const enabled = chk.checked;
+        chk.disabled = true;
+        try {
+          await SP.db.setPollUserAccess(visibilityPollId, uid, enabled);
+          SP.utils.toast(enabled ? "Access granted." : "Access removed.", "ok");
+          // Refresh our accessiblePolls so selector reflects any changes for self
+          accessiblePolls = await SP.db.listPollsForDashboardUser(session.id);
+          if (!accessiblePolls.some((p) => p.id === selectedPollId)) {
+            rebuildPollSelector();
+            await loadAll();
+          }
+          renderPollManagement();
+        } catch (err) {
+          SP.utils.toast(friendlyError(err, "Could not update access."), "error");
+          chk.checked = !enabled;
+        } finally { chk.disabled = false; }
+      });
+    });
+  }
+
+  async function openEditPollModal(pollId) {
+    editingPollId = pollId;
+    const poll = (await SP.db.listAllPolls()).find((p) => p.id === pollId);
+    if (!poll) return;
+    el.modalEpTitle.value = poll.title;
+    el.modalEpDesc.value  = poll.description || "";
+    el.modalEpActive.checked = poll.is_active !== false;
+    el.modalEpError.textContent = "";
+    openModal(el.modalEp);
+    setTimeout(() => el.modalEpTitle.focus(), 40);
+  }
+
+  function openArchiveModal(pollId) {
+    pendingArchivePollId = pollId;
+    openModal(el.modalAp);
+  }
+
+  // -------------------------------------------------------
   // Modals
   // -------------------------------------------------------
   function wireModals() {
     document.querySelectorAll("[data-modal-cancel]").forEach((n) => n.addEventListener("click", closeAllModals));
     document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeAllModals(); });
 
-    // Delete question
     el.modalDqConfirm && el.modalDqConfirm.addEventListener("click", async () => {
       if (!pendingDeleteQId) return;
-      el.modalDqConfirm.disabled = true;
-      el.modalDqConfirm.textContent = "Deleting...";
+      el.modalDqConfirm.disabled = true; el.modalDqConfirm.textContent = "Deleting...";
       try {
-        await SP.db.softDeleteQuestion(pendingDeleteQId);
+        await SP.db.softDeleteQuestion(pendingDeleteQId, selectedPollId);
         SP.utils.toast("Question deleted.", "ok");
-        closeAllModals();
-        await loadAll();
-      } catch (err) {
-        SP.utils.toast(friendlyError(err, "Could not delete."), "error");
-      } finally {
-        el.modalDqConfirm.disabled = false;
-        el.modalDqConfirm.textContent = "Delete";
-      }
+        closeAllModals(); await loadAll();
+        if (isAdmin()) renderPollManagement();
+      } catch (err) { SP.utils.toast(friendlyError(err, "Could not delete."), "error"); }
+      finally { el.modalDqConfirm.disabled = false; el.modalDqConfirm.textContent = "Delete"; }
     });
 
-    // Delete submission
     el.modalDsConfirm && el.modalDsConfirm.addEventListener("click", async () => {
       if (!pendingDeleteSubId) return;
-      el.modalDsConfirm.disabled = true;
-      el.modalDsConfirm.textContent = "Deleting...";
+      el.modalDsConfirm.disabled = true; el.modalDsConfirm.textContent = "Deleting...";
       try {
         await SP.db.deleteSubmission(pendingDeleteSubId);
         SP.utils.toast("Response deleted.", "ok");
-        closeAllModals();
-        await loadAll();
-      } catch (err) {
-        SP.utils.toast(friendlyError(err, "Could not delete."), "error");
-      } finally {
-        el.modalDsConfirm.disabled = false;
-        el.modalDsConfirm.textContent = "Delete";
-      }
+        closeAllModals(); await loadAll();
+        if (isAdmin()) renderPollManagement();
+      } catch (err) { SP.utils.toast(friendlyError(err, "Could not delete."), "error"); }
+      finally { el.modalDsConfirm.disabled = false; el.modalDsConfirm.textContent = "Delete"; }
     });
 
-    // Reset
     if (el.modalResetInput) {
       el.modalResetInput.addEventListener("input", () => {
         el.modalResetConfirm.disabled = el.modalResetInput.value.trim() !== "RESET";
       });
     }
     el.modalResetConfirm && el.modalResetConfirm.addEventListener("click", async () => {
-      if (el.modalResetInput.value.trim() !== "RESET") return;
+      if (el.modalResetInput.value.trim() !== "RESET" || !selectedPollId) return;
       el.modalResetError.textContent = "";
       el.modalResetConfirm.disabled = true;
       el.modalResetConfirm.textContent = "Exporting...";
       try {
-        // Step 1: export CSV of everything first (use a fresh unfiltered fetch so backup is complete)
-        const backup = await SP.db.getUserResponses({ assignedUserId: "all" });
-        const ok = downloadCsv(backup, activeQuestions, `swift-poll-backup-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`);
+        const backup = await SP.db.getUserResponses({ pollId: selectedPollId, assignedUserId: "all" });
+        const qs     = await SP.db.getActiveQuestions(selectedPollId);
+        const ok = downloadCsv(backup, qs, `swift-poll-${selectedPoll?.slug || "poll"}-backup-${stamp()}.csv`);
         if (!ok) throw new Error("CSV backup failed");
-
-        // Step 2: reset
         el.modalResetConfirm.textContent = "Resetting...";
-        await SP.db.resetPollData();
-        SP.utils.toast("Reset complete. A CSV backup was downloaded.", "ok");
+        await SP.db.resetPollData(selectedPollId);
+        SP.utils.toast("Reset complete. CSV downloaded.", "ok");
         closeAllModals();
-        activeQuestions = [];
+        SP.db.invalidateCache(selectedPollId);
         await loadAll();
+        if (isAdmin()) renderPollManagement();
       } catch (err) {
-        console.error(err);
         el.modalResetError.textContent = friendlyError(err, "Reset failed. Nothing was deleted.");
       } finally {
         el.modalResetConfirm.disabled = false;
@@ -642,37 +779,64 @@
       }
     });
 
-    // Change password
     el.modalPwConfirm && el.modalPwConfirm.addEventListener("click", async () => {
       if (!pendingPasswordUserId) return;
       const pw = (el.modalPwInput.value || "").trim();
-      if (pw.length < 4) {
-        el.modalPwError.textContent = "Password must be at least 4 characters.";
-        return;
-      }
-      el.modalPwConfirm.disabled = true;
-      el.modalPwConfirm.textContent = "Saving...";
+      if (pw.length < 4) { el.modalPwError.textContent = "Password must be at least 4 characters."; return; }
+      el.modalPwConfirm.disabled = true; el.modalPwConfirm.textContent = "Saving...";
       try {
         await SP.db.changeDashboardPassword(pendingPasswordUserId, pw);
         SP.utils.toast("Password changed.", "ok");
         closeAllModals();
-      } catch (err) {
-        el.modalPwError.textContent = friendlyError(err, "Could not change password.");
-      } finally {
-        el.modalPwConfirm.disabled = false;
-        el.modalPwConfirm.textContent = "Save";
-      }
+      } catch (err) { el.modalPwError.textContent = friendlyError(err, "Could not change password."); }
+      finally { el.modalPwConfirm.disabled = false; el.modalPwConfirm.textContent = "Save"; }
+    });
+
+    el.modalEpSave && el.modalEpSave.addEventListener("click", async () => {
+      if (!editingPollId) return;
+      el.modalEpError.textContent = "";
+      el.modalEpSave.disabled = true;
+      try {
+        await SP.db.updatePoll(editingPollId, {
+          title: el.modalEpTitle.value,
+          description: el.modalEpDesc.value,
+          isActive: el.modalEpActive.checked
+        });
+        SP.utils.toast("Poll saved.", "ok");
+        closeAllModals();
+        accessiblePolls = await SP.db.listPollsForDashboardUser(session.id);
+        rebuildPollSelector();
+        await renderPollManagement();
+        await loadAll();
+      } catch (err) { el.modalEpError.textContent = friendlyError(err, "Could not save."); }
+      finally { el.modalEpSave.disabled = false; }
+    });
+
+    el.modalApConfirm && el.modalApConfirm.addEventListener("click", async () => {
+      if (!pendingArchivePollId) return;
+      el.modalApConfirm.disabled = true; el.modalApConfirm.textContent = "Archiving...";
+      try {
+        await SP.db.archivePoll(pendingArchivePollId);
+        SP.utils.toast("Poll archived.", "ok");
+        closeAllModals();
+        accessiblePolls = await SP.db.listPollsForDashboardUser(session.id);
+        rebuildPollSelector();
+        await renderPollManagement();
+        await loadAll();
+      } catch (err) { SP.utils.toast(friendlyError(err, "Could not archive."), "error"); }
+      finally { el.modalApConfirm.disabled = false; el.modalApConfirm.textContent = "Archive"; }
     });
   }
 
   function openModal(node) { node.classList.remove("is-hidden"); }
   function closeAllModals() {
     document.querySelectorAll(".sp-modal").forEach((n) => n.classList.add("is-hidden"));
-    pendingDeleteQId = pendingDeleteSubId = pendingPasswordUserId = null;
+    pendingDeleteQId = pendingDeleteSubId = pendingPasswordUserId = pendingArchivePollId = null;
+    editingPollId = visibilityPollId = null;
   }
 
   // -------------------------------------------------------
-  // Aggregated results
+  // Aggregated results (solid colors per option index)
   // -------------------------------------------------------
   function renderAggregates(questions) {
     if (!questions.length) { el.aggregates.innerHTML = ""; return; }
@@ -684,25 +848,25 @@
               <span class="sp-agg-card__badge">Q${qi + 1}</span>
               <h3 class="sp-agg-card__title">${SP.utils.escapeHtml(q.text)}</h3>
             </header>
-            <p class="sp-muted">Free-text question. See answers in the User-wise responses section below.</p>
+            <p class="sp-muted">Free-text question. See answers in User-wise responses.</p>
             <footer class="sp-agg-card__foot">Total responses: <strong>${q.total || 0}</strong></footer>
           </article>`;
       }
       const total = q.total || 0;
-      const optionsHtml = q.options.slice().sort((a, b) => (a.order - b.order) || a.text.localeCompare(b.text))
-        .map((o) => {
-          const pct = total > 0 ? Math.round((o.count / total) * 100) : 0;
-          return `
-            <li class="sp-bar">
-              <div class="sp-bar__head">
-                <span class="sp-bar__label">${SP.utils.escapeHtml(o.text)}</span>
-                <span class="sp-bar__val">${o.count} <span class="sp-bar__pct">(${pct}%)</span></span>
-              </div>
-              <div class="sp-bar__track" aria-hidden="true">
-                <div class="sp-bar__fill sp-bar__fill--${SP.utils.escapeHtml(o.value)}" style="width:${pct}%"></div>
-              </div>
-            </li>`;
-        }).join("");
+      const sortedOpts = q.options.slice().sort((a, b) => (a.order - b.order) || a.text.localeCompare(b.text));
+      const optionsHtml = sortedOpts.map((o, oi) => {
+        const pct = total > 0 ? Math.round((o.count / total) * 100) : 0;
+        return `
+          <li class="sp-bar">
+            <div class="sp-bar__head">
+              <span class="sp-bar__label">${SP.utils.escapeHtml(o.text)}</span>
+              <span class="sp-bar__val">${o.count} <span class="sp-bar__pct">(${pct}%)</span></span>
+            </div>
+            <div class="sp-bar__track" aria-hidden="true">
+              <div class="sp-bar__fill sp-bar__fill--i${oi % 5}" style="width:${pct}%"></div>
+            </div>
+          </li>`;
+      }).join("");
       return `
         <article class="sp-agg-card">
           <header class="sp-agg-card__head">
@@ -716,7 +880,7 @@
   }
 
   // -------------------------------------------------------
-  // User-wise responses (with delete for admin, text answers supported)
+  // User-wise responses
   // -------------------------------------------------------
   function scopeFromSubmission(s) {
     return s.assigned?.display_name || dashboardUsers.find((u) => u.id === s.assigned_user_id)?.display_name || "-";
@@ -741,39 +905,29 @@
         </tr>
       </thead>`;
     const rows = submissions.map((s) => {
-      const answersByQ = {};
-      (s.answers || []).forEach((a) => {
-        if (a.question_id && activeIds.has(a.question_id)) answersByQ[a.question_id] = a;
-      });
-      const cells = questions.map((q) => `<td>${SP.utils.escapeHtml(answerValue(answersByQ[q.id] || {}, q))}</td>`).join("");
-      const delBtn = isAdmin()
-        ? `<td><button type="button" class="sp-btn sp-btn--danger sp-btn--sm" data-delete-sub="${SP.utils.escapeHtml(s.id)}">Delete</button></td>`
-        : "";
+      const byQ = {};
+      (s.answers || []).forEach((a) => { if (a.question_id && activeIds.has(a.question_id)) byQ[a.question_id] = a; });
+      const cells = questions.map((q) => `<td>${SP.utils.escapeHtml(answerValue(byQ[q.id] || {}, q))}</td>`).join("");
+      const delBtn = isAdmin() ? `<td><button type="button" class="sp-btn sp-btn--danger sp-btn--sm" data-delete-sub="${SP.utils.escapeHtml(s.id)}">Delete</button></td>` : "";
       return `<tr>
         <td>${SP.utils.escapeHtml(s.user?.full_name || "Anonymous")}</td>
         <td class="sp-muted">${SP.utils.escapeHtml(scopeFromSubmission(s))}</td>
         <td class="sp-muted">${SP.utils.escapeHtml(SP.utils.formatDate(s.submitted_at))}</td>
-        ${cells}
-        ${delBtn}
+        ${cells}${delBtn}
       </tr>`;
     }).join("");
-
     const tableHtml = `<div class="sp-table-wrap"><table class="sp-table">${tableHead}<tbody>${rows}</tbody></table></div>`;
 
     const cardsHtml = submissions.map((s) => {
-      const answersByQ = {};
-      (s.answers || []).forEach((a) => {
-        if (a.question_id && activeIds.has(a.question_id)) answersByQ[a.question_id] = a;
-      });
+      const byQ = {};
+      (s.answers || []).forEach((a) => { if (a.question_id && activeIds.has(a.question_id)) byQ[a.question_id] = a; });
       const items = questions.map((q, i) => `
         <li><span class="sp-user-card__q">Q${i + 1}.</span>
-          <span class="sp-user-card__a">${SP.utils.escapeHtml(answerValue(answersByQ[q.id] || {}, q))}</span>
+          <span class="sp-user-card__a">${SP.utils.escapeHtml(answerValue(byQ[q.id] || {}, q))}</span>
         </li>`).join("");
       const name  = s.user?.full_name || "Anonymous";
       const scope = scopeFromSubmission(s);
-      const delBtn = isAdmin()
-        ? `<button type="button" class="sp-btn sp-btn--danger sp-btn--sm" data-delete-sub="${SP.utils.escapeHtml(s.id)}">Delete</button>`
-        : "";
+      const delBtn = isAdmin() ? `<button type="button" class="sp-btn sp-btn--danger sp-btn--sm" data-delete-sub="${SP.utils.escapeHtml(s.id)}">Delete</button>` : "";
       return `
         <article class="sp-user-card">
           <header class="sp-user-card__head">
@@ -790,9 +944,7 @@
         </article>`;
     }).join("");
 
-    el.users.innerHTML = `
-      <div class="sp-users__desktop">${tableHtml}</div>
-      <div class="sp-users__mobile">${cardsHtml}</div>`;
+    el.users.innerHTML = `<div class="sp-users__desktop">${tableHtml}</div><div class="sp-users__mobile">${cardsHtml}</div>`;
 
     if (isAdmin()) {
       el.users.querySelectorAll("[data-delete-sub]").forEach((btn) => {
@@ -800,7 +952,7 @@
           const id = btn.getAttribute("data-delete-sub");
           const s = lastUserRows.find((x) => x.id === id);
           const who = s?.user?.full_name || "this respondent";
-          el.modalDsBody.textContent = `Delete the response from ${who}? This removes the submission and all its answers.`;
+          el.modalDsBody.textContent = `Delete the response from ${who}?`;
           pendingDeleteSubId = id;
           openModal(el.modalDs);
         });
@@ -809,31 +961,26 @@
   }
 
   // -------------------------------------------------------
-  // CSV export (flattened: one row per answer)
+  // CSV export
   // -------------------------------------------------------
+  function stamp() { return new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-"); }
+
   function downloadCsv(submissions, questions, filename) {
     try {
       const header = ["Submission ID","Respondent","Scope","Submitted At","Question","Question Type","Answer"];
       const lines = [header.map(csvEscape).join(",")];
-      const qById = {};
-      questions.forEach((q) => { qById[q.id] = q; });
+      const qById = {}; questions.forEach((q) => { qById[q.id] = q; });
       for (const s of submissions) {
         const who   = s.user?.full_name || "Anonymous";
         const scope = scopeFromSubmission(s);
         const when  = SP.utils.formatDate(s.submitted_at);
         const answers = (s.answers || []).filter((a) => qById[a.question_id]);
         if (!answers.length) {
-          lines.push([s.id, who, scope, when, "", "", ""].map(csvEscape).join(","));
-          continue;
+          lines.push([s.id, who, scope, when, "", "", ""].map(csvEscape).join(",")); continue;
         }
         for (const a of answers) {
           const q = qById[a.question_id];
-          lines.push([
-            s.id, who, scope, when,
-            q?.text || "",
-            q?.type || "",
-            answerValue(a, q)
-          ].map(csvEscape).join(","));
+          lines.push([s.id, who, scope, when, q?.text || "", q?.type || "", answerValue(a, q)].map(csvEscape).join(","));
         }
       }
       const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
@@ -847,9 +994,11 @@
   }
 
   function exportCsv() {
+    if (!selectedPollId) { SP.utils.toast("Select a poll first.", "error"); return; }
     if (!lastUserRows.length) { SP.utils.toast("No data to export yet.", "error"); return; }
     const scope = currentFilter === "all" ? "all" : currentFilter.slice(0, 8);
-    downloadCsv(lastUserRows, activeQuestions, `swift-poll-${scope}-${new Date().toISOString().slice(0, 10)}.csv`);
+    const slug = selectedPoll?.slug || "poll";
+    downloadCsv(lastUserRows, activeQuestions, `swift-poll-${slug}-${scope}-${new Date().toISOString().slice(0, 10)}.csv`);
   }
 
   function csvEscape(v) {
@@ -857,9 +1006,6 @@
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   }
 
-  // -------------------------------------------------------
-  // Error mapping
-  // -------------------------------------------------------
   function friendlyError(err, fallback) {
     const msg = (err && (err.message || err.error_description)) || "";
     if (/Supabase URL not configured|Supabase client library not loaded/i.test(msg))
@@ -868,6 +1014,7 @@
     if (/Invalid API key|JWT|401/i.test(msg)) return "Invalid Supabase anon key.";
     if (/function .* does not exist/i.test(msg)) return "Database is out of date. Re-run supabase-schema.sql.";
     if (/relation .* does not exist/i.test(msg)) return "Database tables missing. Run supabase-schema.sql.";
+    if (/duplicate key/i.test(msg)) return "That slug is already used. Pick a different one.";
     if (/Failed to fetch|NetworkError/i.test(msg)) return "Network issue. Please try again.";
     return fallback + (msg ? " (" + msg + ")" : "");
   }

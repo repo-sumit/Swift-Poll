@@ -34,7 +34,22 @@ create table if not exists public.polls (
   slug        text unique not null,
   title       text not null,
   description text,
-  created_at  timestamptz not null default now()
+  is_active   boolean not null default true,
+  deleted_at  timestamptz,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+-- Maps which dashboard_users (role=user) can access which polls.
+-- Admins bypass this - they see every poll.
+create table if not exists public.poll_user_access (
+  id                 uuid primary key default gen_random_uuid(),
+  poll_id            uuid not null references public.polls(id) on delete cascade,
+  dashboard_user_id  uuid not null references public.dashboard_users(id) on delete cascade,
+  is_enabled         boolean not null default true,
+  created_at         timestamptz not null default now(),
+  updated_at         timestamptz not null default now(),
+  unique (poll_id, dashboard_user_id)
 );
 
 create table if not exists public.questions (
@@ -108,6 +123,11 @@ alter table public.question_options add column if not exists created_at  timesta
 alter table public.answers          add column if not exists text_answer text;
 alter table public.submissions      add column if not exists assigned_user_id uuid;
 
+-- Multi-poll migration columns
+alter table public.polls            add column if not exists is_active   boolean not null default true;
+alter table public.polls            add column if not exists deleted_at  timestamptz;
+alter table public.polls            add column if not exists updated_at  timestamptz not null default now();
+
 -- Make MCQ columns nullable so text_input rows can use text_answer only
 do $$
 begin
@@ -146,6 +166,11 @@ create index if not exists submissions_assigned_user_idx     on public.submissio
 create index if not exists answers_submission_id_idx         on public.answers (submission_id);
 create index if not exists answers_question_id_idx           on public.answers (question_id);
 create index if not exists answers_option_id_idx             on public.answers (selected_option_id);
+
+create index if not exists polls_active_idx                  on public.polls (is_active, deleted_at);
+
+create index if not exists poll_user_access_poll_idx         on public.poll_user_access (poll_id);
+create index if not exists poll_user_access_user_idx         on public.poll_user_access (dashboard_user_id);
 
 create unique index if not exists dashboard_users_name_idx
   on public.dashboard_users (lower(display_name)) where deleted_at is null;
@@ -194,6 +219,7 @@ alter table public.question_options enable row level security;
 alter table public.submissions      enable row level security;
 alter table public.answers          enable row level security;
 alter table public.dashboard_users  enable row level security;
+alter table public.poll_user_access enable row level security;
 
 -- Reads (poll rendering + dashboard aggregation)
 drop policy if exists "read users"            on public.users;
@@ -232,6 +258,24 @@ drop policy if exists "admin delete submissions" on public.submissions;
 drop policy if exists "admin delete answers"     on public.answers;
 create policy "admin delete submissions" on public.submissions for delete using (true);
 create policy "admin delete answers"     on public.answers     for delete using (true);
+
+-- Polls CRUD (admin from dashboard; UI-gated)
+drop policy if exists "admin insert polls"  on public.polls;
+drop policy if exists "admin update polls"  on public.polls;
+drop policy if exists "admin delete polls"  on public.polls;
+create policy "admin insert polls" on public.polls for insert with check (true);
+create policy "admin update polls" on public.polls for update using (true) with check (true);
+create policy "admin delete polls" on public.polls for delete using (true);
+
+-- Poll access mapping: anon can read, write for admin UI
+drop policy if exists "read poll_user_access"   on public.poll_user_access;
+drop policy if exists "insert poll_user_access" on public.poll_user_access;
+drop policy if exists "update poll_user_access" on public.poll_user_access;
+drop policy if exists "delete poll_user_access" on public.poll_user_access;
+create policy "read poll_user_access"   on public.poll_user_access for select using (true);
+create policy "insert poll_user_access" on public.poll_user_access for insert with check (true);
+create policy "update poll_user_access" on public.poll_user_access for update using (true) with check (true);
+create policy "delete poll_user_access" on public.poll_user_access for delete using (true);
 
 -- dashboard_users: block all direct anon access. Everything goes
 -- through the security-definer RPCs defined below so password_hash
@@ -300,6 +344,18 @@ begin
     end if;
   end loop;
 end $$;
+
+-- Backward-compat: grant every existing non-admin user access to
+-- the default poll so nothing breaks after deployment.
+insert into public.poll_user_access (poll_id, dashboard_user_id, is_enabled)
+select p.id, d.id, true
+from public.polls p
+join public.dashboard_users d on d.role = 'user' and d.is_active = true and d.deleted_at is null
+where p.slug = 'swift-poll-default'
+  and not exists (
+    select 1 from public.poll_user_access a
+    where a.poll_id = p.id and a.dashboard_user_id = d.id
+  );
 
 -- =============================================================
 -- 7. MIGRATE submissions.assigned_user (text) -> assigned_user_id
@@ -503,6 +559,63 @@ begin
   delete from public.questions;
 end $$;
 
+-- Scoped reset: wipe a single poll's data only. Keeps the poll row
+-- itself, other polls, and all users intact.
+create or replace function public.dashboard_reset_poll(p_poll_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+begin
+  delete from public.answers
+    where submission_id in (select id from public.submissions where poll_id = p_poll_id);
+  delete from public.submissions where poll_id = p_poll_id;
+  delete from public.question_options
+    where question_id in (select id from public.questions where poll_id = p_poll_id);
+  delete from public.questions where poll_id = p_poll_id;
+end $$;
+
+-- Polls visible to a given respondent user bucket (dashboard_user
+-- with role='user'). Only active, non-deleted polls that are
+-- explicitly enabled for that user.
+create or replace function public.polls_for_respondent(p_dashboard_user_id uuid)
+returns table(id uuid, slug text, title text, description text)
+language sql
+security definer
+set search_path = public, extensions
+as $$
+  select p.id, p.slug, p.title, p.description
+  from public.polls p
+  join public.poll_user_access a on a.poll_id = p.id
+  where a.dashboard_user_id = p_dashboard_user_id
+    and a.is_enabled = true
+    and p.is_active  = true
+    and p.deleted_at is null
+  order by p.title;
+$$;
+
+-- Polls visible to a logged-in dashboard user. Admins see every
+-- non-deleted poll (including inactive, so they can toggle it on);
+-- normal users see only polls explicitly enabled for them.
+create or replace function public.polls_for_dashboard_user(p_user_id uuid)
+returns table(id uuid, slug text, title text, description text, is_active boolean)
+language sql
+security definer
+set search_path = public, extensions
+as $$
+  select p.id, p.slug, p.title, p.description, p.is_active
+  from public.polls p
+  where p.deleted_at is null
+    and (
+      exists (select 1 from public.dashboard_users d
+              where d.id = p_user_id and d.role = 'admin' and d.is_active = true and d.deleted_at is null)
+      or exists (select 1 from public.poll_user_access a
+                 where a.poll_id = p.id and a.dashboard_user_id = p_user_id and a.is_enabled = true)
+    )
+  order by p.title;
+$$;
+
 -- Grant execute to anon (the default Supabase client role)
 grant execute on function public.dashboard_login(text, text)                          to anon, authenticated;
 grant execute on function public.dashboard_list_users()                               to anon, authenticated;
@@ -512,6 +625,9 @@ grant execute on function public.dashboard_rename_user(uuid, text)              
 grant execute on function public.dashboard_change_password(uuid, text)                to anon, authenticated;
 grant execute on function public.dashboard_delete_user(uuid)                          to anon, authenticated;
 grant execute on function public.dashboard_reset_data()                               to anon, authenticated;
+grant execute on function public.dashboard_reset_poll(uuid)                           to anon, authenticated;
+grant execute on function public.polls_for_respondent(uuid)                           to anon, authenticated;
+grant execute on function public.polls_for_dashboard_user(uuid)                       to anon, authenticated;
 
 -- =============================================================
 -- 9. Aggregated view (active only)
