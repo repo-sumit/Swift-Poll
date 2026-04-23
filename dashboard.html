@@ -303,15 +303,47 @@
         <label class="sp-field__label">Description</label>
         <textarea class="sp-input sp-input--area" rows="2" maxlength="400" data-modal-ep-description></textarea>
       </div>
-      <label class="sp-switch">
-        <input type="checkbox" data-modal-ep-active />
-        <span class="sp-switch__track" aria-hidden="true"></span>
-        <span class="sp-switch__label">Active</span>
-      </label>
+      <div class="sp-field">
+        <label class="sp-field__label">Status</label>
+        <select class="sp-input sp-select" data-modal-ep-status>
+          <option value="draft">Draft</option>
+          <option value="active">Active</option>
+          <option value="archived">Archived</option>
+        </select>
+        <p class="sp-fineprint sp-fineprint--sm">
+          A poll must have at least one active question before it can be set to Active.
+        </p>
+      </div>
       <p class="sp-error" data-modal-ep-error role="alert"></p>
       <div class="sp-modal__actions">
         <button type="button" class="sp-btn sp-btn--ghost" data-modal-cancel>Cancel</button>
         <button type="button" class="sp-btn sp-btn--primary" data-modal-ep-save>Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Duplicate poll modal -->
+  <div class="sp-modal is-hidden" data-modal-duplicate role="dialog" aria-modal="true" aria-labelledby="modal-dup-title">
+    <div class="sp-modal__backdrop" data-modal-cancel></div>
+    <div class="sp-modal__dialog" role="document">
+      <h3 id="modal-dup-title" class="sp-modal__title">Duplicate poll</h3>
+      <p class="sp-modal__body">
+        Copies the poll's questions and options into a new <strong>Draft</strong>. Submissions and
+        user mappings are not copied.
+      </p>
+      <div class="sp-field">
+        <label class="sp-field__label">New name</label>
+        <input class="sp-input" type="text" maxlength="120" data-modal-dup-title />
+      </div>
+      <div class="sp-field">
+        <label class="sp-field__label">New slug</label>
+        <input class="sp-input" type="text" maxlength="60" data-modal-dup-slug
+               pattern="[a-z0-9](?:[a-z0-9-]*[a-z0-9])?" />
+      </div>
+      <p class="sp-error" data-modal-dup-error role="alert"></p>
+      <div class="sp-modal__actions">
+        <button type="button" class="sp-btn sp-btn--ghost" data-modal-cancel>Cancel</button>
+        <button type="button" class="sp-btn sp-btn--primary" data-modal-dup-confirm>Duplicate</button>
       </div>
     </div>
   </div>
@@ -360,9 +392,9 @@
   </footer>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-  <script src="js/config.js?v=6"></script>
-  <script src="js/utils.js?v=6"></script>
-  <script src="js/supabase.js?v=6"></script>
-  <script src="js/dashboard.js?v=6"></script>
+  <script src="js/config.js?v=7"></script>
+  <script src="js/utils.js?v=7"></script>
+  <script src="js/supabase.js?v=7"></script>
+  <script src="js/dashboard.js?v=7"></script>
 </body>
 </html>

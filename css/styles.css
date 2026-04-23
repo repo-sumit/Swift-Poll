@@ -851,6 +851,11 @@ a:hover { text-decoration: underline; }
 .sp-pill--type { background: rgba(37, 99, 235, 0.1); color: var(--sp-blue-600); }
 .sp-pill--req  { background: rgba(22, 163, 74, 0.12); color: var(--sp-green-600); }
 
+/* Poll status pills */
+.sp-status--draft    { background: rgba(148, 163, 184, 0.18); color: #475569; }
+.sp-status--active   { background: rgba(22, 163, 74, 0.15);   color: var(--sp-green-600); }
+.sp-status--archived { background: rgba(220, 38, 38, 0.10);   color: var(--sp-danger); }
+
 .sp-q-row__meta { display: flex; gap: 6px; margin: 6px 0 8px; flex-wrap: wrap; }
 
 /* ============================================================

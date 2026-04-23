@@ -34,10 +34,23 @@ create table if not exists public.polls (
   slug        text unique not null,
   title       text not null,
   description text,
-  is_active   boolean not null default true,
+  status      text not null default 'draft',
+  is_active   boolean not null default true,  -- legacy; kept in sync via migration below
   deleted_at  timestamptz,
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
+);
+
+-- Short-lived admin session tokens. Every admin write RPC
+-- validates against this table - anon writes that bypass the UI
+-- cannot forge admin access because the token is issued only
+-- by dashboard_login on a correct bcrypt password match.
+create table if not exists public.dashboard_sessions (
+  token              uuid primary key default gen_random_uuid(),
+  dashboard_user_id  uuid not null references public.dashboard_users(id) on delete cascade,
+  role               text not null,
+  expires_at         timestamptz not null,
+  created_at         timestamptz not null default now()
 );
 
 -- Maps which dashboard_users (role=user) can access which polls.
@@ -127,6 +140,22 @@ alter table public.submissions      add column if not exists assigned_user_id uu
 alter table public.polls            add column if not exists is_active   boolean not null default true;
 alter table public.polls            add column if not exists deleted_at  timestamptz;
 alter table public.polls            add column if not exists updated_at  timestamptz not null default now();
+alter table public.polls            add column if not exists status      text not null default 'draft';
+
+-- Backfill status from legacy is_active/deleted_at - but only
+-- on rows that still have the default 'draft' and haven't been
+-- explicitly set by a newer admin action.
+do $$
+begin
+  update public.polls
+     set status = case
+       when deleted_at is not null then 'archived'
+       when is_active = true       then 'active'
+       else                             'draft'
+     end
+   where status = 'draft'
+     and (is_active = true or deleted_at is not null);
+end $$;
 
 -- Make MCQ columns nullable so text_input rows can use text_answer only
 do $$
@@ -168,6 +197,9 @@ create index if not exists answers_question_id_idx           on public.answers (
 create index if not exists answers_option_id_idx             on public.answers (selected_option_id);
 
 create index if not exists polls_active_idx                  on public.polls (is_active, deleted_at);
+create index if not exists polls_status_idx                  on public.polls (status);
+create index if not exists dashboard_sessions_user_idx       on public.dashboard_sessions (dashboard_user_id);
+create index if not exists dashboard_sessions_expires_idx    on public.dashboard_sessions (expires_at);
 
 create index if not exists poll_user_access_poll_idx         on public.poll_user_access (poll_id);
 create index if not exists poll_user_access_user_idx         on public.poll_user_access (dashboard_user_id);
@@ -207,6 +239,10 @@ begin
     alter table public.dashboard_users
       add constraint dashboard_users_role_chk check (role in ('admin','user'));
   end if;
+
+  alter table public.polls drop constraint if exists polls_status_chk;
+  alter table public.polls
+    add constraint polls_status_chk check (status in ('draft','active','archived'));
 end $$;
 
 -- =============================================================
@@ -243,39 +279,26 @@ create policy "insert users"       on public.users       for insert with check (
 create policy "insert submissions" on public.submissions for insert with check (true);
 create policy "insert answers"     on public.answers     for insert with check (true);
 
--- Admin writes on questions + options (UI-gated; mirrors existing model)
+-- Admin-only tables: all writes go through security-definer RPCs
+-- that validate a dashboard_sessions token. Dropping direct-table
+-- policies means anon cannot insert/update/delete these tables
+-- even from DevTools - the RPC is the only doorway.
 drop policy if exists "admin insert questions"        on public.questions;
 drop policy if exists "admin update questions"        on public.questions;
 drop policy if exists "admin insert question_options" on public.question_options;
 drop policy if exists "admin update question_options" on public.question_options;
-create policy "admin insert questions"        on public.questions        for insert with check (true);
-create policy "admin update questions"        on public.questions        for update using (true) with check (true);
-create policy "admin insert question_options" on public.question_options for insert with check (true);
-create policy "admin update question_options" on public.question_options for update using (true) with check (true);
+drop policy if exists "admin delete submissions"      on public.submissions;
+drop policy if exists "admin delete answers"          on public.answers;
+drop policy if exists "admin insert polls"            on public.polls;
+drop policy if exists "admin update polls"            on public.polls;
+drop policy if exists "admin delete polls"            on public.polls;
 
--- Admin delete submission (cascades to answers)
-drop policy if exists "admin delete submissions" on public.submissions;
-drop policy if exists "admin delete answers"     on public.answers;
-create policy "admin delete submissions" on public.submissions for delete using (true);
-create policy "admin delete answers"     on public.answers     for delete using (true);
-
--- Polls CRUD (admin from dashboard; UI-gated)
-drop policy if exists "admin insert polls"  on public.polls;
-drop policy if exists "admin update polls"  on public.polls;
-drop policy if exists "admin delete polls"  on public.polls;
-create policy "admin insert polls" on public.polls for insert with check (true);
-create policy "admin update polls" on public.polls for update using (true) with check (true);
-create policy "admin delete polls" on public.polls for delete using (true);
-
--- Poll access mapping: anon can read, write for admin UI
+-- Poll access mapping: read is public, writes require admin token
 drop policy if exists "read poll_user_access"   on public.poll_user_access;
 drop policy if exists "insert poll_user_access" on public.poll_user_access;
 drop policy if exists "update poll_user_access" on public.poll_user_access;
 drop policy if exists "delete poll_user_access" on public.poll_user_access;
-create policy "read poll_user_access"   on public.poll_user_access for select using (true);
-create policy "insert poll_user_access" on public.poll_user_access for insert with check (true);
-create policy "update poll_user_access" on public.poll_user_access for update using (true) with check (true);
-create policy "delete poll_user_access" on public.poll_user_access for delete using (true);
+create policy "read poll_user_access" on public.poll_user_access for select using (true);
 
 -- dashboard_users: block all direct anon access. Everything goes
 -- through the security-definer RPCs defined below so password_hash
@@ -414,23 +437,85 @@ begin
 end $$;
 
 -- =============================================================
--- 8. RPCs (security definer: hide hashes, enforce invariants)
+-- 8. RPCs
+--
+-- Security model:
+--   * `dashboard_login` issues a 24h bearer token on a correct
+--     bcrypt match and writes it to dashboard_sessions.
+--   * `validate_admin(token)` raises if the token is missing /
+--     expired / not tied to an active admin.
+--   * Every write RPC prefixed `admin_` calls validate_admin()
+--     first. RLS has no open admin-write policies, so bypassing
+--     the RPC with a direct REST call fails.
 -- =============================================================
 
--- Login: returns user row iff password matches and account is active
+-- Return shape changed (added `token`); drop the old signature first.
+drop function if exists public.dashboard_login(text, text);
+
+-- Login: returns user row + session token on success
 create or replace function public.dashboard_login(p_display_name text, p_password text)
-returns table(id uuid, display_name text, role text)
+returns table(id uuid, display_name text, role text, token uuid)
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_user public.dashboard_users%rowtype;
+  v_token uuid;
+begin
+  select * into v_user
+    from public.dashboard_users
+   where lower(display_name) = lower(p_display_name)
+     and is_active = true
+     and deleted_at is null
+     and password_hash = crypt(p_password, password_hash);
+
+  if v_user.id is null then
+    return;  -- empty result = auth failure
+  end if;
+
+  -- Opportunistic cleanup of expired sessions
+  delete from public.dashboard_sessions where expires_at < now();
+
+  insert into public.dashboard_sessions (dashboard_user_id, role, expires_at)
+  values (v_user.id, v_user.role, now() + interval '24 hours')
+  returning dashboard_sessions.token into v_token;
+
+  return query
+    select v_user.id, v_user.display_name, v_user.role, v_token;
+end $$;
+
+create or replace function public.dashboard_logout(p_token uuid)
+returns void
 language sql
 security definer
 set search_path = public, extensions
 as $$
-  select d.id, d.display_name, d.role
-  from public.dashboard_users d
-  where lower(d.display_name) = lower(p_display_name)
-    and d.is_active = true
-    and d.deleted_at is null
-    and d.password_hash = crypt(p_password, d.password_hash);
+  delete from public.dashboard_sessions where token = p_token;
 $$;
+
+-- Internal helper: returns admin's id or raises
+create or replace function public.validate_admin(p_token uuid)
+returns uuid
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare v_admin_id uuid;
+begin
+  select s.dashboard_user_id into v_admin_id
+    from public.dashboard_sessions s
+    join public.dashboard_users   d on d.id = s.dashboard_user_id
+   where s.token = p_token
+     and s.expires_at > now()
+     and s.role = 'admin'
+     and d.is_active = true
+     and d.deleted_at is null;
+  if v_admin_id is null then
+    raise exception 'unauthorized' using errcode = '42501';
+  end if;
+  return v_admin_id;
+end $$;
 
 -- List dashboard users (no hashes exposed)
 create or replace function public.dashboard_list_users()
@@ -458,127 +543,285 @@ as $$
   order by display_name;
 $$;
 
--- Create a new dashboard user
-create or replace function public.dashboard_create_user(
-  p_display_name text, p_password text, p_role text
+-- Drop pre-token versions so ambiguous signatures can't linger
+drop function if exists public.dashboard_create_user(text, text, text);
+drop function if exists public.dashboard_rename_user(uuid, text);
+drop function if exists public.dashboard_change_password(uuid, text);
+drop function if exists public.dashboard_delete_user(uuid);
+drop function if exists public.dashboard_reset_data();
+drop function if exists public.dashboard_reset_poll(uuid);
+
+-- -------------------------------------------------------------
+-- User management (admin-token gated)
+-- -------------------------------------------------------------
+create or replace function public.admin_create_user(
+  p_token uuid, p_display_name text, p_password text
 ) returns uuid
-language plpgsql
-security definer
-set search_path = public, extensions
-as $$
+language plpgsql security definer set search_path = public, extensions as $$
 declare v_id uuid;
 begin
-  -- Admins can only be provisioned directly in SQL. Dashboard UI
-  -- must never create another admin.
-  if p_role <> 'user' then raise exception 'only normal users can be created from the dashboard'; end if;
+  perform public.validate_admin(p_token);
   if char_length(coalesce(p_display_name,'')) = 0 then raise exception 'display_name required'; end if;
   if char_length(coalesce(p_password,'')) < 4 then raise exception 'password too short'; end if;
   if exists (select 1 from public.dashboard_users
              where lower(display_name) = lower(p_display_name) and deleted_at is null) then
     raise exception 'display_name already exists';
   end if;
-
   insert into public.dashboard_users (display_name, role, password_hash, is_active)
-  values (p_display_name, p_role, crypt(p_password, gen_salt('bf')), true)
+  values (p_display_name, 'user', crypt(p_password, gen_salt('bf')), true)
   returning id into v_id;
   return v_id;
 end $$;
 
--- Rename a user
-create or replace function public.dashboard_rename_user(p_id uuid, p_new_name text)
+create or replace function public.admin_rename_user(p_token uuid, p_id uuid, p_new_name text)
 returns void
-language plpgsql
-security definer
-set search_path = public, extensions
-as $$
+language plpgsql security definer set search_path = public, extensions as $$
 begin
+  perform public.validate_admin(p_token);
   if char_length(coalesce(p_new_name,'')) = 0 then raise exception 'display_name required'; end if;
   if exists (select 1 from public.dashboard_users
              where lower(display_name) = lower(p_new_name) and deleted_at is null and id <> p_id) then
     raise exception 'display_name already exists';
   end if;
-  update public.dashboard_users
-     set display_name = p_new_name, updated_at = now()
-   where id = p_id;
+  update public.dashboard_users set display_name = p_new_name, updated_at = now() where id = p_id;
 end $$;
 
--- Change password
-create or replace function public.dashboard_change_password(p_id uuid, p_new_password text)
+create or replace function public.admin_change_password(p_token uuid, p_id uuid, p_new_password text)
 returns void
-language plpgsql
-security definer
-set search_path = public, extensions
-as $$
+language plpgsql security definer set search_path = public, extensions as $$
 begin
+  perform public.validate_admin(p_token);
   if char_length(coalesce(p_new_password,'')) < 4 then raise exception 'password too short'; end if;
   update public.dashboard_users
      set password_hash = crypt(p_new_password, gen_salt('bf')), updated_at = now()
    where id = p_id;
 end $$;
 
--- Soft-delete user (protect last active admin)
-create or replace function public.dashboard_delete_user(p_id uuid)
+create or replace function public.admin_delete_user(p_token uuid, p_id uuid)
 returns void
-language plpgsql
-security definer
-set search_path = public, extensions
-as $$
-declare
-  v_role text;
-  v_remaining_admins int;
+language plpgsql security definer set search_path = public, extensions as $$
+declare v_role text; v_remaining int;
 begin
+  perform public.validate_admin(p_token);
   select role into v_role from public.dashboard_users where id = p_id and deleted_at is null;
   if v_role is null then raise exception 'user not found'; end if;
-
   if v_role = 'admin' then
-    select count(*) into v_remaining_admins
-      from public.dashboard_users
+    select count(*) into v_remaining from public.dashboard_users
      where role = 'admin' and is_active = true and deleted_at is null and id <> p_id;
-    if v_remaining_admins < 1 then
-      raise exception 'cannot delete the last active admin';
-    end if;
+    if v_remaining < 1 then raise exception 'cannot delete the last active admin'; end if;
   end if;
-
   update public.dashboard_users
      set is_active = false, deleted_at = now(), updated_at = now()
    where id = p_id;
 end $$;
 
--- Reset poll data: delete questions + options + submissions + answers.
--- Keeps polls, users, dashboard_users.
-create or replace function public.dashboard_reset_data()
-returns void
-language plpgsql
-security definer
-set search_path = public, extensions
-as $$
+-- -------------------------------------------------------------
+-- Poll management
+-- -------------------------------------------------------------
+create or replace function public.admin_create_poll(
+  p_token uuid, p_title text, p_slug text, p_description text
+) returns uuid
+language plpgsql security definer set search_path = public, extensions as $$
+declare v_id uuid;
 begin
-  delete from public.answers;
-  delete from public.submissions;
-  delete from public.question_options;
-  delete from public.questions;
+  perform public.validate_admin(p_token);
+  if char_length(coalesce(p_title,'')) = 0 then raise exception 'title required'; end if;
+  if char_length(coalesce(p_slug,'')) = 0 then raise exception 'slug required'; end if;
+  insert into public.polls (title, slug, description, status, is_active)
+  values (p_title, lower(p_slug), nullif(p_description, ''), 'draft', false)
+  returning id into v_id;
+  return v_id;
 end $$;
 
--- Scoped reset: wipe a single poll's data only. Keeps the poll row
--- itself, other polls, and all users intact.
-create or replace function public.dashboard_reset_poll(p_poll_id uuid)
-returns void
-language plpgsql
-security definer
-set search_path = public, extensions
-as $$
+create or replace function public.admin_update_poll(
+  p_token uuid, p_id uuid, p_title text, p_description text, p_status text
+) returns void
+language plpgsql security definer set search_path = public, extensions as $$
+declare v_has_questions boolean;
 begin
+  perform public.validate_admin(p_token);
+  if p_status not in ('draft','active','archived') then raise exception 'invalid status'; end if;
+
+  if p_status = 'active' then
+    select exists (
+      select 1 from public.questions
+       where poll_id = p_id and is_active = true and deleted_at is null
+    ) into v_has_questions;
+    if not v_has_questions then
+      raise exception 'A poll must have at least one active question before it can be activated.';
+    end if;
+  end if;
+
+  update public.polls
+     set title       = coalesce(nullif(trim(p_title), ''), title),
+         description = case when p_description is null then description else nullif(trim(p_description), '') end,
+         status      = p_status,
+         is_active   = (p_status = 'active'),
+         deleted_at  = case when p_status = 'archived' and deleted_at is null then now() else deleted_at end,
+         updated_at  = now()
+   where id = p_id;
+end $$;
+
+-- Duplicate a poll: copy the row + its active questions/options.
+-- Submissions, answers, and access mappings are intentionally NOT
+-- copied. The new poll starts as 'draft'.
+create or replace function public.admin_duplicate_poll(
+  p_token uuid, p_source_id uuid, p_new_slug text, p_new_title text
+) returns uuid
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_src public.polls%rowtype;
+  v_new_id uuid;
+  v_src_q record;
+  v_new_q uuid;
+begin
+  perform public.validate_admin(p_token);
+  select * into v_src from public.polls where id = p_source_id;
+  if v_src.id is null then raise exception 'source poll not found'; end if;
+
+  insert into public.polls (title, slug, description, status, is_active)
+  values (
+    coalesce(nullif(trim(p_new_title), ''), v_src.title || ' (Copy)'),
+    lower(coalesce(nullif(trim(p_new_slug), ''), v_src.slug || '-copy')),
+    v_src.description,
+    'draft', false
+  )
+  returning id into v_new_id;
+
+  for v_src_q in
+    select id, question_text, question_type, display_order, is_required
+      from public.questions
+     where poll_id = p_source_id and is_active = true and deleted_at is null
+     order by display_order
+  loop
+    insert into public.questions (poll_id, question_text, question_type, display_order, is_active, is_required)
+    values (v_new_id, v_src_q.question_text, v_src_q.question_type, v_src_q.display_order, true, v_src_q.is_required)
+    returning id into v_new_q;
+
+    insert into public.question_options (question_id, option_text, option_value, display_order, is_active)
+    select v_new_q, option_text, option_value, display_order, true
+      from public.question_options
+     where question_id = v_src_q.id and is_active = true and deleted_at is null
+     order by display_order;
+  end loop;
+
+  return v_new_id;
+end $$;
+
+-- -------------------------------------------------------------
+-- Poll visibility
+-- -------------------------------------------------------------
+create or replace function public.admin_set_poll_access(
+  p_token uuid, p_poll_id uuid, p_user_id uuid, p_enabled boolean
+) returns void
+language plpgsql security definer set search_path = public, extensions as $$
+begin
+  perform public.validate_admin(p_token);
+  insert into public.poll_user_access (poll_id, dashboard_user_id, is_enabled, updated_at)
+  values (p_poll_id, p_user_id, p_enabled, now())
+  on conflict (poll_id, dashboard_user_id)
+  do update set is_enabled = excluded.is_enabled, updated_at = now();
+end $$;
+
+-- -------------------------------------------------------------
+-- Question management
+-- -------------------------------------------------------------
+create or replace function public.admin_create_question(
+  p_token uuid, p_poll_id uuid, p_text text, p_type text,
+  p_is_required boolean, p_options text[]
+) returns uuid
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_id uuid;
+  v_order int;
+  v_opt text;
+  v_idx int;
+begin
+  perform public.validate_admin(p_token);
+
+  if char_length(coalesce(p_text,'')) = 0 then raise exception 'question text required'; end if;
+  if char_length(p_text) > 150 then raise exception 'question too long'; end if;
+  if p_type not in ('single_select','text_input') then raise exception 'invalid type'; end if;
+
+  if p_type = 'single_select' then
+    if p_options is null or array_length(p_options, 1) is null then
+      raise exception 'MCQ needs at least 2 options';
+    end if;
+    if array_length(p_options, 1) < 2 then raise exception 'MCQ needs at least 2 options'; end if;
+    if array_length(p_options, 1) > 5 then raise exception 'MCQ allows at most 5 options'; end if;
+  end if;
+
+  select coalesce(max(display_order), 0) + 1 into v_order
+    from public.questions where poll_id = p_poll_id;
+
+  insert into public.questions (poll_id, question_text, question_type, display_order, is_active, is_required)
+  values (p_poll_id, p_text, p_type, v_order, true, coalesce(p_is_required, false))
+  returning id into v_id;
+
+  if p_type = 'single_select' then
+    v_idx := 1;
+    foreach v_opt in array p_options loop
+      if char_length(trim(coalesce(v_opt, ''))) = 0 then raise exception 'blank option'; end if;
+      if char_length(v_opt) > 75 then raise exception 'option too long'; end if;
+      insert into public.question_options (question_id, option_text, option_value, display_order, is_active)
+      values (v_id, v_opt, 'opt_' || v_idx, v_idx, true);
+      v_idx := v_idx + 1;
+    end loop;
+  end if;
+
+  return v_id;
+end $$;
+
+-- Soft-delete a question; if it was the last active question in an
+-- active poll, demote the poll back to 'draft' so the system stops
+-- serving an empty poll.
+create or replace function public.admin_delete_question(p_token uuid, p_question_id uuid)
+returns void
+language plpgsql security definer set search_path = public, extensions as $$
+declare v_poll_id uuid;
+begin
+  perform public.validate_admin(p_token);
+  select poll_id into v_poll_id from public.questions where id = p_question_id;
+  if v_poll_id is null then raise exception 'question not found'; end if;
+
+  update public.question_options set is_active = false, deleted_at = now() where question_id = p_question_id;
+  update public.questions        set is_active = false, deleted_at = now(), updated_at = now() where id = p_question_id;
+
+  if not exists (
+    select 1 from public.questions
+     where poll_id = v_poll_id and is_active = true and deleted_at is null
+  ) then
+    update public.polls set status = 'draft', is_active = false, updated_at = now()
+     where id = v_poll_id and status = 'active';
+  end if;
+end $$;
+
+-- -------------------------------------------------------------
+-- Submission deletion + scoped reset
+-- -------------------------------------------------------------
+create or replace function public.admin_delete_submission(p_token uuid, p_submission_id uuid)
+returns void
+language plpgsql security definer set search_path = public, extensions as $$
+begin
+  perform public.validate_admin(p_token);
+  delete from public.submissions where id = p_submission_id;
+end $$;
+
+create or replace function public.admin_reset_poll(p_token uuid, p_poll_id uuid)
+returns void
+language plpgsql security definer set search_path = public, extensions as $$
+begin
+  perform public.validate_admin(p_token);
   delete from public.answers
     where submission_id in (select id from public.submissions where poll_id = p_poll_id);
   delete from public.submissions where poll_id = p_poll_id;
   delete from public.question_options
     where question_id in (select id from public.questions where poll_id = p_poll_id);
   delete from public.questions where poll_id = p_poll_id;
+  update public.polls set status = 'draft', is_active = false, updated_at = now() where id = p_poll_id;
 end $$;
 
--- Polls visible to a given respondent user bucket (dashboard_user
--- with role='user'). Only active, non-deleted polls that are
--- explicitly enabled for that user.
+-- Respondent view: active polls only, mapped to this user bucket.
 create or replace function public.polls_for_respondent(p_dashboard_user_id uuid)
 returns table(id uuid, slug text, title text, description text)
 language sql
@@ -590,44 +833,57 @@ as $$
   join public.poll_user_access a on a.poll_id = p.id
   where a.dashboard_user_id = p_dashboard_user_id
     and a.is_enabled = true
-    and p.is_active  = true
-    and p.deleted_at is null
+    and p.status     = 'active'
   order by p.title;
 $$;
 
--- Polls visible to a logged-in dashboard user. Admins see every
--- non-deleted poll (including inactive, so they can toggle it on);
--- normal users see only polls explicitly enabled for them.
+-- Return shape changed (is_active -> status); drop first.
+drop function if exists public.polls_for_dashboard_user(uuid);
+
+-- Dashboard view: admin sees every poll (draft/active/archived);
+-- normal user sees only active polls mapped to them.
 create or replace function public.polls_for_dashboard_user(p_user_id uuid)
-returns table(id uuid, slug text, title text, description text, is_active boolean)
+returns table(id uuid, slug text, title text, description text, status text)
 language sql
 security definer
 set search_path = public, extensions
 as $$
-  select p.id, p.slug, p.title, p.description, p.is_active
+  select p.id, p.slug, p.title, p.description, p.status
   from public.polls p
-  where p.deleted_at is null
-    and (
-      exists (select 1 from public.dashboard_users d
-              where d.id = p_user_id and d.role = 'admin' and d.is_active = true and d.deleted_at is null)
-      or exists (select 1 from public.poll_user_access a
-                 where a.poll_id = p.id and a.dashboard_user_id = p_user_id and a.is_enabled = true)
+  where (
+    exists (select 1 from public.dashboard_users d
+             where d.id = p_user_id and d.role = 'admin' and d.is_active = true and d.deleted_at is null)
+    or (
+      p.status = 'active'
+      and exists (select 1 from public.poll_user_access a
+                   where a.poll_id = p.id and a.dashboard_user_id = p_user_id and a.is_enabled = true)
     )
+  )
   order by p.title;
 $$;
 
--- Grant execute to anon (the default Supabase client role)
+-- Grants. admin_* functions are still callable by anon, but they
+-- raise 'unauthorized' without a valid admin token.
 grant execute on function public.dashboard_login(text, text)                          to anon, authenticated;
+grant execute on function public.dashboard_logout(uuid)                               to anon, authenticated;
 grant execute on function public.dashboard_list_users()                               to anon, authenticated;
 grant execute on function public.dashboard_active_user_accounts()                     to anon, authenticated;
-grant execute on function public.dashboard_create_user(text, text, text)              to anon, authenticated;
-grant execute on function public.dashboard_rename_user(uuid, text)                    to anon, authenticated;
-grant execute on function public.dashboard_change_password(uuid, text)                to anon, authenticated;
-grant execute on function public.dashboard_delete_user(uuid)                          to anon, authenticated;
-grant execute on function public.dashboard_reset_data()                               to anon, authenticated;
-grant execute on function public.dashboard_reset_poll(uuid)                           to anon, authenticated;
 grant execute on function public.polls_for_respondent(uuid)                           to anon, authenticated;
 grant execute on function public.polls_for_dashboard_user(uuid)                       to anon, authenticated;
+grant execute on function public.validate_admin(uuid)                                 to anon, authenticated;
+
+grant execute on function public.admin_create_user(uuid, text, text)                  to anon, authenticated;
+grant execute on function public.admin_rename_user(uuid, uuid, text)                  to anon, authenticated;
+grant execute on function public.admin_change_password(uuid, uuid, text)              to anon, authenticated;
+grant execute on function public.admin_delete_user(uuid, uuid)                        to anon, authenticated;
+grant execute on function public.admin_create_poll(uuid, text, text, text)            to anon, authenticated;
+grant execute on function public.admin_update_poll(uuid, uuid, text, text, text)      to anon, authenticated;
+grant execute on function public.admin_duplicate_poll(uuid, uuid, text, text)         to anon, authenticated;
+grant execute on function public.admin_set_poll_access(uuid, uuid, uuid, boolean)     to anon, authenticated;
+grant execute on function public.admin_create_question(uuid, uuid, text, text, boolean, text[]) to anon, authenticated;
+grant execute on function public.admin_delete_question(uuid, uuid)                    to anon, authenticated;
+grant execute on function public.admin_delete_submission(uuid, uuid)                  to anon, authenticated;
+grant execute on function public.admin_reset_poll(uuid, uuid)                         to anon, authenticated;
 
 -- =============================================================
 -- 9. Aggregated view (active only)

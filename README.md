@@ -186,6 +186,34 @@ Swift Poll now supports multiple polls. Key behaviour:
 - Seed logic grants every existing non-admin user access to the existing default poll (`swift-poll-default`), so nothing breaks for current users.
 - Existing submissions and questions remain tied to the default poll via `poll_id`.
 
+### Admin enforcement is now server-side
+
+Earlier versions relied on hiding admin UI and trusting the client. That is no longer the case:
+
+- `dashboard_login` issues a 24-hour session token and writes it to a new `dashboard_sessions` table.
+- Every admin action (create/update/duplicate/archive poll, manage visibility, add/delete question, create/rename/delete user, change password, delete submission, reset poll) goes through a `security definer` RPC that calls `validate_admin(p_token)` first. A missing, expired, or non-admin token raises `unauthorized`.
+- The broad "admin insert/update/delete" RLS policies that previously existed on `polls`, `questions`, `question_options`, `poll_user_access`, `submissions`, `answers`, and `dashboard_users` are **dropped**. The only writes RLS still allows for anon are the respondent path (`users`, `submissions`, `answers` inserts). Everything else must go through an RPC.
+
+**Remaining limitations**: the anon JS bundle holds the token in `sessionStorage`. Leaking that token on a shared device lets an attacker impersonate the admin until it expires. The proper long-term fix is Supabase Auth with JWT + role-scoped RLS; this token layer is the strongest practical interim.
+
+### Poll lifecycle
+
+`polls.status` is one of:
+
+- **draft** - in preparation; hidden from respondents; admin-editable.
+- **active** - live; visible to mapped users in the respondent picker.
+- **archived** - hidden from respondents; historical data still queryable by admin.
+
+Rules enforced at the database:
+
+- New polls start as **draft**. Duplicated polls also start as **draft**.
+- `admin_update_poll` refuses to set `status='active'` if the poll has no active questions ("A poll must have at least one active question before it can be activated.").
+- `admin_delete_question` automatically demotes the poll to **draft** if deleting that question leaves zero active questions.
+
+### Duplicate poll
+
+Admin clicks **Duplicate** in the Poll Management list -> modal pre-fills `${name} (Copy)` and `${slug}-copy`. On confirm, `admin_duplicate_poll` copies the row + every active question and its active options as a new **draft** poll. Submissions, answers, and user-visibility mappings are **not** copied.
+
 ### Option colours
 
 MCQ option bars in the admin analytics now use a solid distinct palette assigned by option order (blue / green / amber / purple / red), not the legacy yes/no/not-sure shading.

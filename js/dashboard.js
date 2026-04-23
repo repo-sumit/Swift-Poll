@@ -29,6 +29,7 @@
   let pendingArchivePollId = null;
   let editingPollId = null;
   let visibilityPollId = null;
+  let duplicatingPollId = null;
 
   document.addEventListener("DOMContentLoaded", async () => {
     SP.utils.setHeaderBrand();
@@ -129,9 +130,15 @@
       modalEp:        document.querySelector("[data-modal-edit-poll]"),
       modalEpTitle:   document.querySelector("[data-modal-ep-title]"),
       modalEpDesc:    document.querySelector("[data-modal-ep-description]"),
-      modalEpActive:  document.querySelector("[data-modal-ep-active]"),
+      modalEpStatus:  document.querySelector("[data-modal-ep-status]"),
       modalEpError:   document.querySelector("[data-modal-ep-error]"),
       modalEpSave:    document.querySelector("[data-modal-ep-save]"),
+
+      modalDup:       document.querySelector("[data-modal-duplicate]"),
+      modalDupTitle:  document.querySelector("[data-modal-dup-title]"),
+      modalDupSlug:   document.querySelector("[data-modal-dup-slug]"),
+      modalDupError:  document.querySelector("[data-modal-dup-error]"),
+      modalDupConfirm:document.querySelector("[data-modal-dup-confirm]"),
 
       modalAp:        document.querySelector("[data-modal-archive-poll]"),
       modalApBody:    document.querySelector("[data-modal-ap-body]"),
@@ -151,7 +158,12 @@
   function wireCommon() {
     el.refreshBtn && el.refreshBtn.addEventListener("click", loadAll);
     el.exportBtn  && el.exportBtn.addEventListener("click", exportCsv);
-    el.logoutBtn  && el.logoutBtn.addEventListener("click", () => { clearSession(); window.location.replace("dashboard-access.html"); });
+    el.logoutBtn && el.logoutBtn.addEventListener("click", async () => {
+      const tok = session && session.token;
+      clearSession();
+      try { if (tok) await SP.db.logoutDashboardUser(tok); } catch (_) {}
+      window.location.replace("dashboard-access.html");
+    });
     el.resetBtn && el.resetBtn.addEventListener("click", () => {
       if (!isAdmin() || !selectedPollId) return;
       el.modalResetInput.value = "";
@@ -182,7 +194,8 @@
     accessiblePolls.forEach((p) => {
       const o = document.createElement("option");
       o.value = p.id;
-      o.textContent = p.title + (p.is_active === false ? " (inactive)" : "");
+      const tag = p.status && p.status !== "active" ? ` (${p.status})` : "";
+      o.textContent = p.title + tag;
       el.pollSelect.appendChild(o);
     });
 
@@ -409,7 +422,8 @@
     accessiblePolls.forEach((p) => {
       const o = document.createElement("option");
       o.value = p.id;
-      o.textContent = p.title + (p.is_active === false ? " (inactive)" : "");
+      const tag = p.status && p.status !== "active" ? ` (${p.status})` : "";
+      o.textContent = p.title + tag;
       el.pollSelect.appendChild(o);
     });
     const next = accessiblePolls.find((p) => p.id === preferredPollId)
@@ -626,9 +640,10 @@
 
     el.pollsList.innerHTML = all.map((p, i) => {
       const s = stats[i] || {};
-      const status = p.is_active
-        ? `<span class="sp-pill sp-pill--req">Active</span>`
-        : `<span class="sp-pill">Inactive</span>`;
+      const statusLabel = (p.status || "draft");
+      const statusPill  = `<span class="sp-pill sp-status sp-status--${statusLabel}">${statusLabel[0].toUpperCase() + statusLabel.slice(1)}</span>`;
+      const isArchived  = statusLabel === "archived";
+      const archiveLabel = isArchived ? "Unarchive" : "Archive";
       return `
         <article class="sp-poll-row" data-poll-row-id="${SP.utils.escapeHtml(p.id)}">
           <header class="sp-poll-row__head">
@@ -636,7 +651,7 @@
               <h4>${SP.utils.escapeHtml(p.title)}</h4>
               <span class="sp-muted">${SP.utils.escapeHtml(p.slug)}</span>
             </div>
-            ${status}
+            ${statusPill}
           </header>
           ${p.description ? `<p class="sp-muted sp-poll-row__desc">${SP.utils.escapeHtml(p.description)}</p>` : ""}
           <div class="sp-poll-row__stats">
@@ -647,14 +662,27 @@
           <div class="sp-poll-row__actions">
             <button type="button" class="sp-btn sp-btn--ghost sp-btn--sm" data-poll-visibility>Visibility</button>
             <button type="button" class="sp-btn sp-btn--ghost sp-btn--sm" data-poll-edit>Edit</button>
-            <button type="button" class="sp-btn sp-btn--danger sp-btn--sm" data-poll-archive>Archive</button>
+            <button type="button" class="sp-btn sp-btn--ghost sp-btn--sm" data-poll-duplicate>Duplicate</button>
+            <button type="button" class="sp-btn sp-btn--danger sp-btn--sm" data-poll-archive>${archiveLabel}</button>
           </div>
         </article>`;
     }).join("");
 
     el.pollsList.querySelectorAll("[data-poll-visibility]").forEach((b) => b.addEventListener("click", () => openVisibilityModal(b.closest("[data-poll-row-id]").getAttribute("data-poll-row-id"))));
     el.pollsList.querySelectorAll("[data-poll-edit]").forEach((b) => b.addEventListener("click", () => openEditPollModal(b.closest("[data-poll-row-id]").getAttribute("data-poll-row-id"))));
+    el.pollsList.querySelectorAll("[data-poll-duplicate]").forEach((b) => b.addEventListener("click", () => openDuplicateModal(b.closest("[data-poll-row-id]").getAttribute("data-poll-row-id"))));
     el.pollsList.querySelectorAll("[data-poll-archive]").forEach((b) => b.addEventListener("click", () => openArchiveModal(b.closest("[data-poll-row-id]").getAttribute("data-poll-row-id"))));
+  }
+
+  async function openDuplicateModal(pollId) {
+    duplicatingPollId = pollId;
+    const poll = (await SP.db.listAllPolls()).find((p) => p.id === pollId);
+    if (!poll) return;
+    el.modalDupTitle.value = `${poll.title} (Copy)`;
+    el.modalDupSlug.value  = `${poll.slug}-copy`;
+    el.modalDupError.textContent = "";
+    openModal(el.modalDup);
+    setTimeout(() => el.modalDupSlug.focus(), 40);
   }
 
   async function openVisibilityModal(pollId) {
@@ -705,9 +733,9 @@
     editingPollId = pollId;
     const poll = (await SP.db.listAllPolls()).find((p) => p.id === pollId);
     if (!poll) return;
-    el.modalEpTitle.value = poll.title;
-    el.modalEpDesc.value  = poll.description || "";
-    el.modalEpActive.checked = poll.is_active !== false;
+    el.modalEpTitle.value  = poll.title;
+    el.modalEpDesc.value   = poll.description || "";
+    el.modalEpStatus.value = poll.status || "draft";
     el.modalEpError.textContent = "";
     openModal(el.modalEp);
     setTimeout(() => el.modalEpTitle.focus(), 40);
@@ -800,7 +828,7 @@
         await SP.db.updatePoll(editingPollId, {
           title: el.modalEpTitle.value,
           description: el.modalEpDesc.value,
-          isActive: el.modalEpActive.checked
+          status: el.modalEpStatus.value
         });
         SP.utils.toast("Poll saved.", "ok");
         closeAllModals();
@@ -816,15 +844,43 @@
       if (!pendingArchivePollId) return;
       el.modalApConfirm.disabled = true; el.modalApConfirm.textContent = "Archiving...";
       try {
-        await SP.db.archivePoll(pendingArchivePollId);
-        SP.utils.toast("Poll archived.", "ok");
+        const all = await SP.db.listAllPolls();
+        const poll = all.find((p) => p.id === pendingArchivePollId);
+        const nextStatus = poll && poll.status === "archived" ? "draft" : "archived";
+        await SP.db.updatePoll(pendingArchivePollId, {
+          title: null, description: null, status: nextStatus
+        });
+        SP.utils.toast(nextStatus === "archived" ? "Poll archived." : "Poll unarchived (Draft).", "ok");
         closeAllModals();
         accessiblePolls = await SP.db.listPollsForDashboardUser(session.id);
         rebuildPollSelector();
         await renderPollManagement();
         await loadAll();
-      } catch (err) { SP.utils.toast(friendlyError(err, "Could not archive."), "error"); }
+      } catch (err) { SP.utils.toast(friendlyError(err, "Could not change status."), "error"); }
       finally { el.modalApConfirm.disabled = false; el.modalApConfirm.textContent = "Archive"; }
+    });
+
+    el.modalDupConfirm && el.modalDupConfirm.addEventListener("click", async () => {
+      if (!duplicatingPollId) return;
+      el.modalDupError.textContent = "";
+      el.modalDupConfirm.disabled = true;
+      el.modalDupConfirm.textContent = "Duplicating...";
+      try {
+        const newId = await SP.db.duplicatePoll(duplicatingPollId, {
+          newSlug: el.modalDupSlug.value, newTitle: el.modalDupTitle.value
+        });
+        SP.utils.toast("Poll duplicated as Draft.", "ok");
+        closeAllModals();
+        accessiblePolls = await SP.db.listPollsForDashboardUser(session.id);
+        rebuildPollSelector(newId);
+        await renderPollManagement();
+        await loadAll();
+      } catch (err) {
+        el.modalDupError.textContent = friendlyError(err, "Could not duplicate.");
+      } finally {
+        el.modalDupConfirm.disabled = false;
+        el.modalDupConfirm.textContent = "Duplicate";
+      }
     });
   }
 
@@ -832,7 +888,7 @@
   function closeAllModals() {
     document.querySelectorAll(".sp-modal").forEach((n) => n.classList.add("is-hidden"));
     pendingDeleteQId = pendingDeleteSubId = pendingPasswordUserId = pendingArchivePollId = null;
-    editingPollId = visibilityPollId = null;
+    editingPollId = visibilityPollId = duplicatingPollId = null;
   }
 
   // -------------------------------------------------------
@@ -1008,6 +1064,8 @@
 
   function friendlyError(err, fallback) {
     const msg = (err && (err.message || err.error_description)) || "";
+    if (/^unauthorized$/i.test(msg) || /42501/.test(msg))
+      return "Your admin session has expired. Please log in again.";
     if (/Supabase URL not configured|Supabase client library not loaded/i.test(msg))
       return "App is not configured yet. Add your Supabase keys in js/config.js.";
     if (/row-level security|RLS/i.test(msg)) return "Database blocked the write. Re-run supabase-schema.sql.";
@@ -1015,6 +1073,7 @@
     if (/function .* does not exist/i.test(msg)) return "Database is out of date. Re-run supabase-schema.sql.";
     if (/relation .* does not exist/i.test(msg)) return "Database tables missing. Run supabase-schema.sql.";
     if (/duplicate key/i.test(msg)) return "That slug is already used. Pick a different one.";
+    if (/must have at least one active question/i.test(msg)) return msg;
     if (/Failed to fetch|NetworkError/i.test(msg)) return "Network issue. Please try again.";
     return fallback + (msg ? " (" + msg + ")" : "");
   }

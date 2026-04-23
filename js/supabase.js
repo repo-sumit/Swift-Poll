@@ -1,9 +1,9 @@
 /**
- * Swift Poll - Supabase client + data-access layer (multi-poll).
+ * Swift Poll - Supabase client + data-access layer.
  *
- * Everything that used to assume a single poll now takes a pollId
- * parameter. Accessible-poll lists go through RPCs that respect
- * dashboard_users / poll_user_access.
+ * Admin writes are enforced at the database: every admin RPC
+ * validates a session token tied to an active admin. The client
+ * holds that token in sessionStorage and passes it on every call.
  */
 
 window.SP = window.SP || {};
@@ -11,7 +11,9 @@ window.SP = window.SP || {};
 SP.db = (function () {
   const cfg = window.SWIFT_POLL_CONFIG || {};
   let client = null;
-  const questionsCacheByPoll = new Map();   // pollId -> [{ id, text, type, required, order, options }]
+  const questionsCacheByPoll = new Map();
+
+  const SESSION_KEY = "swift_poll.dashboard_session";
 
   const LIMITS = {
     QUESTION_TEXT_MAX: 150,
@@ -24,14 +26,13 @@ SP.db = (function () {
     POLL_DESCRIPTION_MAX: 400
   };
 
+  const POLL_STATUS = ["draft", "active", "archived"];
+
   function init() {
     if (client) return client;
-    if (!window.supabase || !window.supabase.createClient) {
-      throw new Error("Supabase client library not loaded");
-    }
-    if (!cfg.SUPABASE_URL || cfg.SUPABASE_URL.includes("YOUR-PROJECT-REF")) {
+    if (!window.supabase || !window.supabase.createClient) throw new Error("Supabase client library not loaded");
+    if (!cfg.SUPABASE_URL || cfg.SUPABASE_URL.includes("YOUR-PROJECT-REF"))
       throw new Error("Supabase URL not configured - edit js/config.js");
-    }
     client = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, {
       auth: { persistSession: false }
     });
@@ -39,137 +40,157 @@ SP.db = (function () {
   }
 
   function invalidateCache(pollId) {
-    if (pollId) questionsCacheByPoll.delete(pollId);
-    else questionsCacheByPoll.clear();
+    if (pollId) questionsCacheByPoll.delete(pollId); else questionsCacheByPoll.clear();
   }
 
   // -------------------------------------------------------
-  // Polls - CRUD + access lists
+  // Session helpers - expose token for admin RPCs
+  // -------------------------------------------------------
+  function readSession() {
+    try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null"); } catch (_) { return null; }
+  }
+  function adminToken() {
+    const s = readSession();
+    return (s && s.role === "admin") ? s.token : null;
+  }
+  function requireToken() {
+    const t = adminToken();
+    if (!t) throw new Error("unauthorized");
+    return t;
+  }
+
+  // -------------------------------------------------------
+  // Auth
+  // -------------------------------------------------------
+  async function loginDashboardUser({ displayName, password }) {
+    const supa = init();
+    const { data, error } = await supa.rpc("dashboard_login", {
+      p_display_name: displayName, p_password: password
+    });
+    if (error) throw error;
+    return (data && data[0]) || null;  // { id, display_name, role, token }
+  }
+
+  async function logoutDashboardUser(token) {
+    if (!token) return;
+    try { await init().rpc("dashboard_logout", { p_token: token }); } catch (_) {}
+  }
+
+  async function listDashboardUsers() {
+    const { data, error } = await init().rpc("dashboard_list_users");
+    if (error) throw error;
+    return data || [];
+  }
+
+  async function getPollUserOptions() {
+    const { data, error } = await init().rpc("dashboard_active_user_accounts");
+    if (error) throw error;
+    return data || [];
+  }
+
+  // -------------------------------------------------------
+  // Polls (reads + admin writes via RPC)
   // -------------------------------------------------------
   async function listAllPolls() {
-    const supa = init();
-    const { data, error } = await supa.from("polls")
-      .select("id, slug, title, description, is_active, deleted_at, created_at, updated_at")
-      .is("deleted_at", null)
+    const { data, error } = await init().from("polls")
+      .select("id, slug, title, description, status, created_at, updated_at")
       .order("created_at", { ascending: true });
     if (error) throw error;
     return data || [];
   }
 
   async function listPollsForDashboardUser(userId) {
-    const supa = init();
-    const { data, error } = await supa.rpc("polls_for_dashboard_user", { p_user_id: userId });
+    const { data, error } = await init().rpc("polls_for_dashboard_user", { p_user_id: userId });
     if (error) throw error;
     return data || [];
   }
 
   async function listPollsForRespondent(dashboardUserId) {
-    const supa = init();
-    const { data, error } = await supa.rpc("polls_for_respondent", {
-      p_dashboard_user_id: dashboardUserId
-    });
+    const { data, error } = await init().rpc("polls_for_respondent", { p_dashboard_user_id: dashboardUserId });
     if (error) throw error;
     return data || [];
   }
 
-  async function getPollById(pollId) {
-    const supa = init();
-    const { data, error } = await supa.from("polls")
-      .select("id, slug, title, description, is_active")
-      .eq("id", pollId).single();
-    if (error) throw error;
-    return data;
-  }
-
   function validatePollPayload({ title, slug, description }) {
     const errors = [];
-    const cleanTitle = String(title || "").trim();
-    const cleanSlug  = String(slug  || "").trim().toLowerCase();
-    const cleanDesc  = String(description || "").trim();
-    if (!cleanTitle) errors.push("Poll name is required.");
-    else if (cleanTitle.length > LIMITS.POLL_TITLE_MAX) errors.push(`Name must be ${LIMITS.POLL_TITLE_MAX} characters or fewer.`);
-    if (!cleanSlug) errors.push("Poll slug is required.");
-    else if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(cleanSlug))
+    const t = String(title || "").trim();
+    const s = String(slug  || "").trim().toLowerCase();
+    const d = String(description || "").trim();
+    if (!t) errors.push("Poll name is required.");
+    else if (t.length > LIMITS.POLL_TITLE_MAX) errors.push(`Name must be ${LIMITS.POLL_TITLE_MAX} characters or fewer.`);
+    if (!s) errors.push("Poll slug is required.");
+    else if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(s))
       errors.push("Slug must be lowercase letters, numbers, and dashes only.");
-    else if (cleanSlug.length > LIMITS.POLL_SLUG_MAX)
+    else if (s.length > LIMITS.POLL_SLUG_MAX)
       errors.push(`Slug must be ${LIMITS.POLL_SLUG_MAX} characters or fewer.`);
-    if (cleanDesc.length > LIMITS.POLL_DESCRIPTION_MAX)
+    if (d.length > LIMITS.POLL_DESCRIPTION_MAX)
       errors.push(`Description must be ${LIMITS.POLL_DESCRIPTION_MAX} characters or fewer.`);
-    return { errors, cleanTitle, cleanSlug, cleanDesc };
+    return { errors, t, s, d };
   }
 
-  async function createPoll({ title, slug, description, isActive }) {
+  async function createPoll({ title, slug, description }) {
     const v = validatePollPayload({ title, slug, description });
     if (v.errors.length) { const e = new Error(v.errors[0]); e.validation = v.errors; throw e; }
-    const supa = init();
-    const { data, error } = await supa.from("polls").insert({
-      title: v.cleanTitle,
-      slug: v.cleanSlug,
-      description: v.cleanDesc || null,
-      is_active: isActive !== false
-    }).select("id, slug, title, description, is_active").single();
+    const { data, error } = await init().rpc("admin_create_poll", {
+      p_token: requireToken(), p_title: v.t, p_slug: v.s, p_description: v.d
+    });
     if (error) throw error;
-    return data;
+    return { id: data, title: v.t, slug: v.s, description: v.d, status: "draft" };
   }
 
-  async function updatePoll(pollId, { title, description, isActive }) {
-    const supa = init();
-    const patch = { updated_at: new Date().toISOString() };
-    if (title != null) {
-      const t = String(title).trim();
-      if (!t) throw new Error("Poll name cannot be empty.");
-      if (t.length > LIMITS.POLL_TITLE_MAX) throw new Error(`Name must be ${LIMITS.POLL_TITLE_MAX} characters or fewer.`);
-      patch.title = t;
-    }
-    if (description != null) {
-      const d = String(description).trim();
-      if (d.length > LIMITS.POLL_DESCRIPTION_MAX) throw new Error(`Description too long.`);
-      patch.description = d || null;
-    }
-    if (isActive != null) patch.is_active = !!isActive;
-    const { error } = await supa.from("polls").update(patch).eq("id", pollId);
+  async function updatePoll(pollId, { title, description, status }) {
+    if (!POLL_STATUS.includes(status)) throw new Error("invalid status");
+    const { error } = await init().rpc("admin_update_poll", {
+      p_token: requireToken(),
+      p_id: pollId,
+      p_title: title == null ? "" : title,
+      p_description: description == null ? null : description,
+      p_status: status
+    });
     if (error) throw error;
   }
 
   async function archivePoll(pollId) {
-    const supa = init();
-    const now = new Date().toISOString();
-    const { error } = await supa.from("polls")
-      .update({ is_active: false, deleted_at: now, updated_at: now })
-      .eq("id", pollId);
+    return updatePoll(pollId, { title: null, description: null, status: "archived" });
+  }
+
+  async function duplicatePoll(pollId, { newSlug, newTitle } = {}) {
+    const { data, error } = await init().rpc("admin_duplicate_poll", {
+      p_token: requireToken(),
+      p_source_id: pollId,
+      p_new_slug:  newSlug  || "",
+      p_new_title: newTitle || ""
+    });
     if (error) throw error;
+    return data;
   }
 
   // -------------------------------------------------------
-  // Poll access mapping
+  // Poll access map
   // -------------------------------------------------------
   async function getPollAccessMap(pollId) {
-    const supa = init();
-    const { data, error } = await supa.from("poll_user_access")
-      .select("dashboard_user_id, is_enabled")
-      .eq("poll_id", pollId);
+    const { data, error } = await init().from("poll_user_access")
+      .select("dashboard_user_id, is_enabled").eq("poll_id", pollId);
     if (error) throw error;
     const map = new Map();
     (data || []).forEach((r) => map.set(r.dashboard_user_id, !!r.is_enabled));
     return map;
   }
 
-  async function setPollUserAccess(pollId, dashboardUserId, isEnabled) {
-    const supa = init();
-    const { error } = await supa.from("poll_user_access")
-      .upsert({ poll_id: pollId, dashboard_user_id: dashboardUserId, is_enabled: !!isEnabled, updated_at: new Date().toISOString() },
-              { onConflict: "poll_id,dashboard_user_id" });
+  async function setPollUserAccess(pollId, userId, isEnabled) {
+    const { error } = await init().rpc("admin_set_poll_access", {
+      p_token: requireToken(), p_poll_id: pollId, p_user_id: userId, p_enabled: !!isEnabled
+    });
     if (error) throw error;
   }
 
   // -------------------------------------------------------
-  // Questions - scoped to a pollId
+  // Questions (reads + admin writes via RPC)
   // -------------------------------------------------------
   async function getActiveQuestions(pollId) {
     if (!pollId) return [];
     if (questionsCacheByPoll.has(pollId)) return questionsCacheByPoll.get(pollId);
-    const supa = init();
-    const { data, error } = await supa.from("questions")
+    const { data, error } = await init().from("questions")
       .select(`
         id, question_text, question_type, display_order, is_active, is_required, deleted_at,
         question_options ( id, option_text, option_value, display_order, is_active, deleted_at )
@@ -179,13 +200,9 @@ SP.db = (function () {
       .is("deleted_at", null)
       .order("display_order", { ascending: true });
     if (error) throw error;
-
     const out = (data || []).map((q) => ({
-      id: q.id,
-      text: q.question_text,
-      type: q.question_type || "single_select",
-      required: !!q.is_required,
-      order: q.display_order,
+      id: q.id, text: q.question_text, type: q.question_type || "single_select",
+      required: !!q.is_required, order: q.display_order,
       options: (q.question_options || [])
         .filter((o) => o.is_active && !o.deleted_at)
         .sort((a, b) => a.display_order - b.display_order)
@@ -195,29 +212,17 @@ SP.db = (function () {
     return out;
   }
 
-  async function getNextQuestionOrder(pollId) {
-    const supa = init();
-    const { data, error } = await supa.from("questions")
-      .select("display_order")
-      .eq("poll_id", pollId)
-      .order("display_order", { ascending: false })
-      .limit(1);
-    if (error) throw error;
-    return ((data && data[0] && data[0].display_order) || 0) + 1;
-  }
-
   function validateQuestionPayload({ text, type, required, options }) {
     const errors = [];
-    const cleanText = String(text == null ? "" : text).trim();
+    const cleanText = String(text || "").trim();
     if (!cleanText) errors.push("Question text is required.");
     else if (cleanText.length > LIMITS.QUESTION_TEXT_MAX)
       errors.push(`Question must be ${LIMITS.QUESTION_TEXT_MAX} characters or fewer.`);
-
     const questionType = (type === "text_input") ? "text_input" : "single_select";
     let cleanOptions = [];
     if (questionType === "single_select") {
       const raw = Array.isArray(options) ? options : [];
-      cleanOptions = raw.map((o) => String(o == null ? "" : o).trim()).filter((t) => t.length > 0);
+      cleanOptions = raw.map((o) => String(o || "").trim()).filter((t) => t.length > 0);
       if (cleanOptions.length < LIMITS.OPTION_MIN) errors.push(`MCQ needs at least ${LIMITS.OPTION_MIN} non-blank options.`);
       if (cleanOptions.length > LIMITS.OPTION_MAX) errors.push(`MCQ allows at most ${LIMITS.OPTION_MAX} options.`);
       if (cleanOptions.some((t) => t.length > LIMITS.OPTION_TEXT_MAX))
@@ -232,101 +237,72 @@ SP.db = (function () {
     if (!pollId) throw new Error("pollId required");
     const v = validateQuestionPayload({ text, type, required, options });
     if (v.errors.length) { const e = new Error(v.errors[0]); e.validation = v.errors; throw e; }
-    const supa = init();
-    const nextOrder = await getNextQuestionOrder(pollId);
-
-    const { data: q, error: qErr } = await supa.from("questions").insert({
-      poll_id: pollId,
-      question_text: v.cleanText,
-      question_type: v.questionType,
-      display_order: nextOrder,
-      is_active: true,
-      is_required: v.required
-    }).select("id").single();
-    if (qErr) throw qErr;
-
-    if (v.questionType === "single_select") {
-      const rows = v.cleanOptions.map((t, i) => ({
-        question_id: q.id, option_text: t, option_value: `opt_${i + 1}`, display_order: i + 1, is_active: true
-      }));
-      const { error: oErr } = await supa.from("question_options").insert(rows);
-      if (oErr) { await supa.from("questions").delete().eq("id", q.id); throw oErr; }
-    }
+    const { data, error } = await init().rpc("admin_create_question", {
+      p_token: requireToken(),
+      p_poll_id: pollId,
+      p_text: v.cleanText,
+      p_type: v.questionType,
+      p_is_required: v.required,
+      p_options: v.questionType === "single_select" ? v.cleanOptions : null
+    });
+    if (error) throw error;
     invalidateCache(pollId);
-    return q.id;
+    return data;
   }
 
   async function softDeleteQuestion(questionId, pollId) {
-    const supa = init();
-    const now = new Date().toISOString();
-    const { error: oErr } = await supa.from("question_options")
-      .update({ is_active: false, deleted_at: now })
-      .eq("question_id", questionId);
-    if (oErr) throw oErr;
-    const { error: qErr } = await supa.from("questions")
-      .update({ is_active: false, deleted_at: now, updated_at: now })
-      .eq("id", questionId);
-    if (qErr) throw qErr;
+    const { error } = await init().rpc("admin_delete_question", {
+      p_token: requireToken(), p_question_id: questionId
+    });
+    if (error) throw error;
     invalidateCache(pollId);
   }
 
   // -------------------------------------------------------
-  // Dashboard accounts (unchanged - kept here for completeness)
+  // Users (admin)
   // -------------------------------------------------------
-  async function loginDashboardUser({ displayName, password }) {
-    const supa = init();
-    const { data, error } = await supa.rpc("dashboard_login", {
-      p_display_name: displayName, p_password: password
-    });
-    if (error) throw error;
-    return (data && data[0]) || null;
-  }
-  async function listDashboardUsers() {
-    const supa = init();
-    const { data, error } = await supa.rpc("dashboard_list_users");
-    if (error) throw error;
-    return data || [];
-  }
-  async function getPollUserOptions() {
-    const supa = init();
-    const { data, error } = await supa.rpc("dashboard_active_user_accounts");
-    if (error) throw error;
-    return data || [];
-  }
-  async function createDashboardUser({ displayName, password, role }) {
-    const supa = init();
-    const { data, error } = await supa.rpc("dashboard_create_user", {
-      p_display_name: displayName, p_password: password, p_role: role || "user"
+  async function createDashboardUser({ displayName, password }) {
+    const { data, error } = await init().rpc("admin_create_user", {
+      p_token: requireToken(), p_display_name: displayName, p_password: password
     });
     if (error) throw error;
     return data;
   }
   async function renameDashboardUser(id, newName) {
-    const { error } = await init().rpc("dashboard_rename_user", { p_id: id, p_new_name: newName });
+    const { error } = await init().rpc("admin_rename_user", {
+      p_token: requireToken(), p_id: id, p_new_name: newName
+    });
     if (error) throw error;
   }
   async function changeDashboardPassword(id, newPassword) {
-    const { error } = await init().rpc("dashboard_change_password", { p_id: id, p_new_password: newPassword });
+    const { error } = await init().rpc("admin_change_password", {
+      p_token: requireToken(), p_id: id, p_new_password: newPassword
+    });
     if (error) throw error;
   }
   async function deleteDashboardUser(id) {
-    const { error } = await init().rpc("dashboard_delete_user", { p_id: id });
+    const { error } = await init().rpc("admin_delete_user", { p_token: requireToken(), p_id: id });
     if (error) throw error;
   }
 
   async function resetPollData(pollId) {
-    if (!pollId) throw new Error("pollId required");
-    const { error } = await init().rpc("dashboard_reset_poll", { p_poll_id: pollId });
+    const { error } = await init().rpc("admin_reset_poll", { p_token: requireToken(), p_poll_id: pollId });
     if (error) throw error;
     invalidateCache(pollId);
   }
 
+  async function deleteSubmission(submissionId) {
+    const { error } = await init().rpc("admin_delete_submission", {
+      p_token: requireToken(), p_submission_id: submissionId
+    });
+    if (error) throw error;
+  }
+
   // -------------------------------------------------------
-  // Respondent / submissions
+  // Respondent
   // -------------------------------------------------------
   async function createUser({ fullName, sessionId }) {
-    const supa = init();
-    const { data, error } = await supa.from("users")
+    const { data, error } = await init().from("users")
       .insert({ full_name: fullName, contact_value: null, session_id: sessionId || null })
       .select("id, full_name, session_id, created_at").single();
     if (error) throw error;
@@ -337,24 +313,16 @@ SP.db = (function () {
     if (!pollId) throw new Error("pollId required");
     if (!assignedUserId) throw new Error("assigned_user_id is required");
     const supa = init();
-
     const { data: submission, error: subErr } = await supa.from("submissions").insert({
-      poll_id: pollId,
-      user_id: userId,
-      assigned_user_id: assignedUserId,
-      status: "submitted"
+      poll_id: pollId, user_id: userId, assigned_user_id: assignedUserId, status: "submitted"
     }).select("id, submitted_at").single();
     if (subErr) throw subErr;
-
-    const rows = answers
-      .filter((a) => !a.skipped)
-      .map((a) => ({
-        submission_id: submission.id,
-        question_id: a.questionId,
-        selected_option_id: a.optionId || null,
-        selected_option_text: a.optionText || null,
-        text_answer: a.textAnswer != null ? a.textAnswer : null
-      }));
+    const rows = answers.filter((a) => !a.skipped).map((a) => ({
+      submission_id: submission.id, question_id: a.questionId,
+      selected_option_id: a.optionId || null,
+      selected_option_text: a.optionText || null,
+      text_answer: a.textAnswer != null ? a.textAnswer : null
+    }));
     if (rows.length) {
       const { error: ansErr } = await supa.from("answers").insert(rows);
       if (ansErr) throw ansErr;
@@ -362,13 +330,8 @@ SP.db = (function () {
     return submission;
   }
 
-  async function deleteSubmission(submissionId) {
-    const { error } = await init().from("submissions").delete().eq("id", submissionId);
-    if (error) throw error;
-  }
-
   // -------------------------------------------------------
-  // Dashboard reads - scoped to pollId
+  // Dashboard reads
   // -------------------------------------------------------
   function resolveAssignedUserFilter(filter) {
     const v = filter && filter.assignedUserId;
@@ -380,7 +343,6 @@ SP.db = (function () {
     const supa = init();
     const questions = await getActiveQuestions(pollId);
     const scoped = resolveAssignedUserFilter({ assignedUserId });
-
     const scaffold = questions.map((q) => ({
       id: q.id, text: q.text, type: q.type, required: q.required, order: q.order,
       options: q.options.map((o) => ({ id: o.id, text: o.text, value: o.value, order: o.order, count: 0 })),
@@ -392,45 +354,36 @@ SP.db = (function () {
       if (q.type === "text_input") textQuestionIds.add(q.id);
       for (const o of q.options) activeOptionIds.add(o.id);
     }
-
     let query = supa.from("answers")
       .select("selected_option_id, question_id, text_answer, submission:submissions!inner(poll_id, assigned_user_id)")
       .eq("submission.poll_id", pollId);
     if (scoped) query = query.eq("submission.assigned_user_id", scoped);
-
     const { data: rows, error } = await query;
     if (error) throw error;
-
     const byOption = new Map();
     const textCounts = new Map();
     for (const r of rows || []) {
-      if (r.selected_option_id && activeOptionIds.has(r.selected_option_id)) {
+      if (r.selected_option_id && activeOptionIds.has(r.selected_option_id))
         byOption.set(r.selected_option_id, (byOption.get(r.selected_option_id) || 0) + 1);
-      }
-      if (r.text_answer && textQuestionIds.has(r.question_id)) {
+      if (r.text_answer && textQuestionIds.has(r.question_id))
         textCounts.set(r.question_id, (textCounts.get(r.question_id) || 0) + 1);
-      }
     }
     for (const q of scaffold) {
       if (q.type === "single_select") {
         for (const o of q.options) o.count = byOption.get(o.id) || 0;
         q.total = q.options.reduce((s, o) => s + o.count, 0);
-      } else {
-        q.total = textCounts.get(q.id) || 0;
-      }
+      } else q.total = textCounts.get(q.id) || 0;
     }
     return { questions: scaffold };
   }
 
   async function getUserResponses({ pollId, assignedUserId }) {
-    const supa = init();
     const scoped = resolveAssignedUserFilter({ assignedUserId });
-    let query = supa.from("submissions").select(`
+    let query = init().from("submissions").select(`
       id, submitted_at, status, assigned_user_id,
       user:users ( id, full_name, session_id ),
       assigned:assigned_user_id ( id, display_name ),
-      answers (
-        question_id, selected_option_text, text_answer,
+      answers ( question_id, selected_option_text, text_answer,
         question:questions ( id, question_text, question_type, display_order, is_active, deleted_at )
       )
     `).eq("poll_id", pollId).order("submitted_at", { ascending: false });
@@ -441,16 +394,14 @@ SP.db = (function () {
   }
 
   async function getTotalSubmissions({ pollId, assignedUserId }) {
-    const supa = init();
     const scoped = resolveAssignedUserFilter({ assignedUserId });
-    let query = supa.from("submissions").select("id", { count: "exact", head: true }).eq("poll_id", pollId);
+    let query = init().from("submissions").select("id", { count: "exact", head: true }).eq("poll_id", pollId);
     if (scoped) query = query.eq("assigned_user_id", scoped);
     const { count, error } = await query;
     if (error) throw error;
     return count || 0;
   }
 
-  // Poll-overview stats (for admin poll management row counts)
   async function getPollStats(pollId) {
     const supa = init();
     const [qRes, subRes, accRes] = await Promise.all([
@@ -468,19 +419,15 @@ SP.db = (function () {
   }
 
   return {
-    init, invalidateCache, LIMITS,
-    // polls
-    listAllPolls, listPollsForDashboardUser, listPollsForRespondent, getPollById,
-    createPoll, updatePoll, archivePoll,
+    init, invalidateCache, LIMITS, POLL_STATUS,
+    loginDashboardUser, logoutDashboardUser,
+    listAllPolls, listPollsForDashboardUser, listPollsForRespondent,
+    createPoll, updatePoll, archivePoll, duplicatePoll,
     getPollAccessMap, setPollUserAccess, getPollStats,
-    // questions
-    getActiveQuestions, getNextQuestionOrder, createQuestionWithOptions, softDeleteQuestion,
-    // dashboard accounts
-    loginDashboardUser, listDashboardUsers, getPollUserOptions,
+    getActiveQuestions, createQuestionWithOptions, softDeleteQuestion,
+    listDashboardUsers, getPollUserOptions,
     createDashboardUser, renameDashboardUser, changeDashboardPassword, deleteDashboardUser,
-    // respondent + reset
     createUser, submitPoll, deleteSubmission, resetPollData,
-    // dashboard reads
     getAggregatedResults, getUserResponses, getTotalSubmissions
   };
 })();

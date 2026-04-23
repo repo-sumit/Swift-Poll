@@ -58,7 +58,12 @@
           password.focus();
           return;
         }
-        setSession({ id: match.id, displayName: match.display_name, role: match.role });
+        setSession({
+          id: match.id,
+          displayName: match.display_name,
+          role: match.role,
+          token: match.token
+        });
         window.location.replace("dashboard.html");
       } catch (err) {
         console.error(err);
