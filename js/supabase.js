@@ -18,7 +18,7 @@ SP.db = (function () {
   const LIMITS = {
     QUESTION_TEXT_MAX: 150,
     OPTION_TEXT_MAX:   75,
-    TEXT_ANSWER_MAX:   200,
+    TEXT_ANSWER_MAX:   300,
     OPTION_MIN: 2,
     OPTION_MAX: 5,
     POLL_TITLE_MAX:       120,

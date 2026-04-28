@@ -5,3 +5,4 @@ Thumbs.db
 .vercel
 node_modules/
 *.log
+supabase-schema.sql

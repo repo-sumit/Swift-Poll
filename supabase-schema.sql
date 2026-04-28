@@ -232,7 +232,7 @@ begin
   alter table public.answers
     add constraint answers_kind_chk check (
       (selected_option_id is not null and text_answer is null) or
-      (selected_option_id is null and char_length(coalesce(text_answer, '')) <= 200)
+      (selected_option_id is null and char_length(coalesce(text_answer, '')) <= 300)
     );
 
   if not exists (select 1 from pg_constraint where conname = 'dashboard_users_role_chk') then

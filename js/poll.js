@@ -12,7 +12,7 @@
  * no draft resume, no skipping.
  */
 (function () {
-  const TEXT_MAX = (SP.db && SP.db.LIMITS && SP.db.LIMITS.TEXT_ANSWER_MAX) || 200;
+  const TEXT_MAX = (SP.db && SP.db.LIMITS && SP.db.LIMITS.TEXT_ANSWER_MAX) || 300;
 
   const state = {
     pollId: null,

@@ -531,7 +531,7 @@
       const reqBadge  = q.required ? `<span class="sp-pill sp-pill--req">Required</span>` : `<span class="sp-pill">Optional</span>`;
       const opts = q.options.length
         ? `<ul class="sp-q-row__opts">${q.options.map((o) => `<li class="sp-q-row__opt">${SP.utils.escapeHtml(o.text)}</li>`).join("")}</ul>`
-        : `<p class="sp-muted">Free-text answer (up to 200 chars).</p>`;
+        : `<p class="sp-muted">Free-text answer (up to 300 chars).</p>`;
       return `
         <article class="sp-q-row" data-q-id="${SP.utils.escapeHtml(q.id)}">
           <header class="sp-q-row__head">
